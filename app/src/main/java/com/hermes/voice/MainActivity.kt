@@ -101,7 +101,7 @@ class MainActivity : AppCompatActivity() {
             binding.btnSend.isEnabled = state == SessionState.IDLE
         }
 
-        viewModel.lastMessage.observe(this) { msg ->
+        viewModel.chatLog.observe(this) { msg ->
             binding.tvLastMessage.text = msg
             binding.scrollView.post {
                 binding.scrollView.fullScroll(android.view.View.FOCUS_DOWN)

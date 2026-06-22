@@ -5,6 +5,7 @@ import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.hermes.voice.api.ApiConfig
+import com.hermes.voice.api.ChatMessage
 import com.hermes.voice.api.HermesApiClient
 import com.hermes.voice.api.StreamEvent
 import com.hermes.voice.session.SessionState
@@ -24,14 +25,16 @@ class MainViewModel @Inject constructor(
     private val _sessionState = MutableLiveData(SessionState.IDLE)
     val sessionState: LiveData<SessionState> = _sessionState
 
-    private val _lastMessage = MutableLiveData("")
-    val lastMessage: LiveData<String> = _lastMessage
+    private val _chatLog = MutableLiveData("")
+    val chatLog: LiveData<String> = _chatLog
 
     private val _configValid = MutableLiveData(false)
     val configValid: LiveData<Boolean> = _configValid
 
     private var chatJob: Job? = null
     private var voiceObserveJob: Job? = null
+    private val chatHistory = mutableListOf<ChatMessage>()
+    private val chatLogBuilder = StringBuilder()
 
     init {
         checkConfig()
@@ -51,17 +54,17 @@ class MainViewModel @Inject constructor(
                 val responseBuilder = StringBuilder()
                 voiceSessionManager.response.collect { token ->
                     responseBuilder.append(token)
-                    _lastMessage.postValue("Hermes: $responseBuilder")
+                    _chatLog.postValue("${chatLogBuilder}Hermes: $responseBuilder")
                 }
             }
             launch {
                 voiceSessionManager.transcript.collect { text ->
-                    _lastMessage.postValue("你: $text")
+                    _chatLog.postValue("${chatLogBuilder}你: $text")
                 }
             }
             launch {
                 voiceSessionManager.error.collect { msg ->
-                    _lastMessage.postValue("错误: $msg")
+                    _chatLog.postValue("${chatLogBuilder}错误: $msg")
                 }
             }
         }
@@ -82,34 +85,44 @@ class MainViewModel @Inject constructor(
     fun sendMessage(text: String) {
         if (text.isBlank()) return
         if (!apiConfig.isConfigured) {
-            _lastMessage.value = "请先在设置中配置 API 地址和 Token"
+            _chatLog.value = "请先在设置中配置 API 地址和 Token"
             return
         }
 
         chatJob?.cancel()
         _sessionState.value = SessionState.THINKING
-        _lastMessage.value = "你: $text\n\nHermes: "
+
+        // 追加用户消息到日志
+        chatLogBuilder.append("你: $text\n\n")
+        _chatLog.value = "${chatLogBuilder}Hermes: ..."
 
         val responseBuilder = StringBuilder()
 
         chatJob = viewModelScope.launch {
-            apiClient.streamChat(text).collect { event ->
+            apiClient.streamChat(text, chatHistory).collect { event ->
                 when (event) {
                     is StreamEvent.Connected -> {
                         _sessionState.postValue(SessionState.THINKING)
                     }
                     is StreamEvent.Token -> {
                         responseBuilder.append(event.content)
-                        _lastMessage.postValue("你: $text\n\nHermes: $responseBuilder")
+                        _chatLog.postValue("${chatLogBuilder}Hermes: $responseBuilder")
                         if (_sessionState.value == SessionState.THINKING) {
                             _sessionState.postValue(SessionState.SPEAKING)
                         }
                     }
                     is StreamEvent.Done -> {
+                        // 保存到对话历史
+                        chatHistory.add(ChatMessage(role = "user", content = text))
+                        chatHistory.add(ChatMessage(role = "assistant", content = responseBuilder.toString()))
+                        // 追加助手回复到日志
+                        chatLogBuilder.append("Hermes: $responseBuilder\n\n")
+                        _chatLog.postValue(chatLogBuilder.toString())
                         _sessionState.postValue(SessionState.IDLE)
                     }
                     is StreamEvent.Error -> {
-                        _lastMessage.postValue("你: $text\n\n错误: ${event.message}")
+                        chatLogBuilder.append("错误: ${event.message}\n\n")
+                        _chatLog.postValue(chatLogBuilder.toString())
                         _sessionState.postValue(SessionState.IDLE)
                     }
                 }
