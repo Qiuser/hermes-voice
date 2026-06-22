@@ -1,0 +1,5 @@
+name: voice_platform
+version: 0.1.0
+description: Voice Platform Adapter — WebSocket 语音平台插件
+platform: voice
+entry: adapter.VoiceAdapter

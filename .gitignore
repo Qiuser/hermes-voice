@@ -1,11 +1,19 @@
+# Android
 *.iml
 .gradle
 /local.properties
 /.idea
 .DS_Store
-/build
 /app/build
+/build
 /captures
 .externalNativeBuild
 .cxx
 local.properties
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+*.egg-info/
