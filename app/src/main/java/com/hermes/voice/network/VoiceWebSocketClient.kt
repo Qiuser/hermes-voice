@@ -9,6 +9,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import android.util.Log
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -39,6 +40,7 @@ class VoiceWebSocketClient @Inject constructor(
 
     fun connect() {
         if (webSocket != null) return
+        Log.d("VoiceWS", "connect() called, url=${config.wsUrl}")
 
         val request = Request.Builder()
             .url(config.wsUrl)
@@ -46,26 +48,31 @@ class VoiceWebSocketClient @Inject constructor(
 
         webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
+                Log.d("VoiceWS", "onOpen, sending auth")
                 // 连接成功，立刻发鉴权
                 val auth = AuthMessage(token = config.voiceToken, deviceId = config.deviceId)
                 ws.send(gson.toJson(auth))
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
+                Log.d("VoiceWS", "onMessage: $text")
                 handleMessage(text)
             }
 
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
+                Log.d("VoiceWS", "onClosing: $code $reason")
                 ws.close(1000, null)
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                Log.d("VoiceWS", "onClosed: $code $reason")
                 webSocket = null
                 authenticated = false
                 _events.tryEmit(WsEvent.Disconnected(reason))
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                Log.e("VoiceWS", "onFailure: ${t.message}", t)
                 webSocket = null
                 authenticated = false
                 _events.tryEmit(WsEvent.Error("连接失败: ${t.message}"))

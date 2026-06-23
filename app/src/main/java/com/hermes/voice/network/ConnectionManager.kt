@@ -3,6 +3,7 @@ package com.hermes.voice.network
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import android.util.Log
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -28,8 +29,15 @@ class ConnectionManager @Inject constructor(
     }
 
     fun start() {
-        if (!config.isConfigured) return
-        if (_connectionState.value == ConnectionState.CONNECTED || _connectionState.value == ConnectionState.CONNECTING) return
+        if (!config.isConfigured) {
+            Log.d("VoiceWS", "start() skipped: not configured")
+            return
+        }
+        if (_connectionState.value == ConnectionState.CONNECTED || _connectionState.value == ConnectionState.CONNECTING) {
+            Log.d("VoiceWS", "start() skipped: already ${_connectionState.value}")
+            return
+        }
+        Log.d("VoiceWS", "start() connecting...")
         _connectionState.value = ConnectionState.CONNECTING
         observeEvents()
         wsClient.connect()
