@@ -68,21 +68,6 @@ class VoiceService : Service() {
         super.onDestroy()
     }
 
-    private fun playTone(toneType: Int, durationMs: Int) {
-        Thread {
-            try {
-                val toneGen = android.media.ToneGenerator(
-                    android.media.AudioManager.STREAM_MUSIC, 100  // 100 = 最大音量
-                )
-                toneGen.startTone(toneType, durationMs)
-                Thread.sleep(durationMs.toLong() + 50)
-                toneGen.release()
-            } catch (e: Exception) {
-                Log.w(TAG, "ToneGenerator error: ${e.message}")
-            }
-        }.start()
-    }
-
     private fun playStartTone() {
         Log.d(TAG, "playStartTone")
         voiceSessionManager.speakCue("嗯")
