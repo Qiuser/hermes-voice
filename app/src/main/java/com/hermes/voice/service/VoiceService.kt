@@ -85,7 +85,7 @@ class VoiceService : Service() {
 
     private fun playStartTone() {
         Log.d(TAG, "playStartTone")
-        voiceSessionManager.speakCue("我在")
+        voiceSessionManager.speakCue("嗯")
     }
 
     private fun playEndTone() {
