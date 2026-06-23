@@ -31,7 +31,7 @@ class XfyunSttClient(
     private var webSocket: WebSocket? = null
     private var isFirstFrame = true
     private var isClosed = false
-    private val resultBuilder = StringBuilder()
+    private val sentences = mutableMapOf<Int, String>() // sn → 该句文字
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
@@ -126,6 +126,9 @@ class XfyunSttClient(
 
             // 解析识别文字
             val ws = result.getAsJsonArray("ws") ?: return
+            val sn = result.get("sn")?.asInt ?: 0
+            val pgs = result.get("pgs")?.asString // "apd" = 追加, "rpl" = 替换
+
             val segmentText = StringBuilder()
             for (i in 0 until ws.size()) {
                 val cw = ws[i].asJsonObject.getAsJsonArray("cw")
@@ -134,23 +137,30 @@ class XfyunSttClient(
                 }
             }
 
-            // 拼接完整结果
-            // 讯飞的 result 里有 pgs 字段：rpl=替换之前的，apd=追加
-            val pgs = result.get("pgs")?.asString
-            if (pgs == "rpl") {
-                // 替换模式：清除之前的片段重新拼接
-                // sn 表示第几句
-            }
-            // 简单处理：直接用累积方式
-            resultBuilder.append(segmentText)
+            Log.d(TAG, "sn=$sn pgs=$pgs segment='$segmentText' status=$status")
 
-            val currentText = resultBuilder.toString()
-            onPartialResult(currentText)
+            // 按 sn 维护每句话的内容
+            if (pgs == "rpl") {
+                // 替换模式：用 rg 字段指示要替换的范围
+                val rg = result.getAsJsonArray("rg")
+                if (rg != null && rg.size() >= 2) {
+                    val start = rg[0].asInt
+                    val end = rg[1].asInt
+                    // 替换 start~end 的句子
+                    for (i in start..end) {
+                        sentences.remove(i)
+                    }
+                }
+            }
+            sentences[sn] = segmentText.toString()
+
+            // 拼接所有句子
+            val fullText = sentences.toSortedMap().values.joinToString("")
+            onPartialResult(fullText)
 
             if (status == 2) {
-                // 最终结果
-                Log.d(TAG, "Final result: $currentText")
-                onFinalResult(currentText)
+                Log.d(TAG, "Final result: $fullText")
+                onFinalResult(fullText)
                 close()
             }
         } catch (e: Exception) {

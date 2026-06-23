@@ -62,9 +62,15 @@ class MainViewModel @Inject constructor(
             }
             launch {
                 voiceSessionManager.transcript.collect { text ->
-                    // 用户说的话，追加到 chatLog
+                    // 最终识别结果，追加到 chatLog
                     chatLogBuilder.append("你: $text\n\n")
                     _chatLog.postValue("${chatLogBuilder}Hermes: ...")
+                }
+            }
+            launch {
+                voiceSessionManager.partial.collect { text ->
+                    // 中间识别结果，临时显示不追加
+                    _chatLog.postValue("${chatLogBuilder}你: $text")
                 }
             }
             launch {

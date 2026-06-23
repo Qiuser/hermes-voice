@@ -34,6 +34,9 @@ class VoiceSessionManager @Inject constructor(
     private val _transcript = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val transcript: SharedFlow<String> = _transcript
 
+    private val _partial = MutableSharedFlow<String>(extraBufferCapacity = 16)
+    val partial: SharedFlow<String> = _partial
+
     private val _response = MutableSharedFlow<String>(extraBufferCapacity = 64)
     val response: SharedFlow<String> = _response
 
@@ -79,7 +82,8 @@ class VoiceSessionManager @Inject constructor(
                         ttsManager.playBeep(500, 100)
                     }
                     is SttEvent.PartialResult -> {
-                        _transcript.tryEmit(event.text)
+                        // partial result 不发送，只通知 UI 临时展示
+                        _partial.tryEmit(event.text)
                     }
                     is SttEvent.Error -> {
                         Log.d("VoiceSession", "STT error: ${event.message}")
