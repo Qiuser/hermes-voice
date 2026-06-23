@@ -241,6 +241,55 @@ class TtsManager @Inject constructor(
         isReady = false
     }
 
+    /**
+     * 播放一个短促提示音（独立 AudioTrack，不和 TTS 排队）
+     */
+    fun playBeep(freqHz: Int = 880, durationMs: Int = 80) {
+        Thread {
+            val sampleRate = 16000
+            val numSamples = sampleRate * durationMs / 1000
+            // DAC 预热 + 提示音
+            val warmupSamples = sampleRate * 50 / 1000
+            val total = warmupSamples + numSamples
+            val samples = ShortArray(total)
+            for (i in 0 until warmupSamples) samples[i] = 1
+            for (i in 0 until numSamples) {
+                val t = i.toFloat() / sampleRate
+                val env = minOf(1.0f, i.toFloat() / (numSamples * 0.1f)) *
+                          minOf(1.0f, (numSamples - i).toFloat() / (numSamples * 0.2f))
+                samples[warmupSamples + i] = (kotlin.math.sin(2.0 * Math.PI * freqHz * t).toFloat() * 28000 * env)
+                    .toInt().coerceIn(-32768, 32767).toShort()
+            }
+
+            val bufSize = android.media.AudioTrack.getMinBufferSize(
+                sampleRate, android.media.AudioFormat.CHANNEL_OUT_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT
+            )
+            val track = android.media.AudioTrack.Builder()
+                .setAudioAttributes(
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                .setAudioFormat(
+                    android.media.AudioFormat.Builder()
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO)
+                        .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+                        .build()
+                )
+                .setBufferSizeInBytes(maxOf(bufSize, total * 2))
+                .setTransferMode(android.media.AudioTrack.MODE_STATIC)
+                .build()
+
+            track.write(samples, 0, samples.size)
+            track.play()
+            Thread.sleep((50 + durationMs).toLong() + 30)
+            try { track.stop() } catch (_: Exception) {}
+            try { track.release() } catch (_: Exception) {}
+        }.start()
+    }
+
     private fun extractDataDir(assetPath: String, dirName: String, version: String): String {
         val targetDir = java.io.File(context.filesDir, dirName)
         val versionFile = java.io.File(targetDir, ".version")

@@ -75,6 +75,8 @@ class VoiceSessionManager @Inject constructor(
                         _transcript.tryEmit(event.text)
                         transitionTo(SessionState.THINKING)
                         wsClient.sendMessage(event.text)
+                        // 提示音：消息已发送
+                        ttsManager.playBeep(500, 100)
                     }
                     is SttEvent.PartialResult -> {
                         _transcript.tryEmit(event.text)
@@ -98,7 +100,10 @@ class VoiceSessionManager @Inject constructor(
                 when (event) {
                     is TtsEvent.AllDone -> {
                         if (_state.value == SessionState.SPEAKING) {
-                            // 播报完成 → 继续监听（连续对话）
+                            // 播报完成 → 暂停 0.5 秒 → 提示音 → 继续监听
+                            kotlinx.coroutines.delay(500)
+                            ttsManager.playBeep(500, 100)
+                            kotlinx.coroutines.delay(150)
                             transitionTo(SessionState.LISTENING)
                             sttManager.startListening()
                         }
