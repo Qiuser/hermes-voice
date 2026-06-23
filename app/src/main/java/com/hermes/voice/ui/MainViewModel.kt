@@ -39,7 +39,8 @@ class MainViewModel @Inject constructor(
     private var voiceObserveJob: Job? = null
     private val chatLogBuilder = StringBuilder()
     private val currentResponse = StringBuilder()
-    private var waitingForResponse = false
+    private var waitingForTextResponse = false // 仅文字对话模式
+    private var inVoiceSession = false // 语音对话模式
 
     init {
         checkConfig()
@@ -55,11 +56,15 @@ class MainViewModel @Inject constructor(
             launch {
                 voiceSessionManager.state.collect { state ->
                     _sessionState.postValue(state)
+                    // 跟踪语音会话状态
+                    inVoiceSession = state != SessionState.IDLE
                 }
             }
             launch {
                 voiceSessionManager.transcript.collect { text ->
-                    _chatLog.postValue("${chatLogBuilder}你: $text")
+                    // 用户说的话，追加到 chatLog
+                    chatLogBuilder.append("你: $text\n\n")
+                    _chatLog.postValue("${chatLogBuilder}Hermes: ...")
                 }
             }
             launch {
@@ -92,16 +97,15 @@ class MainViewModel @Inject constructor(
                     is WsEvent.Delta -> {
                         currentResponse.append(event.content)
                         _chatLog.postValue("${chatLogBuilder}Hermes: $currentResponse")
-                        if (_sessionState.value == SessionState.IDLE && waitingForResponse) {
-                            _sessionState.postValue(SessionState.SPEAKING)
-                        }
                     }
                     is WsEvent.End -> {
-                        if (waitingForResponse) {
+                        if (currentResponse.isNotEmpty()) {
                             chatLogBuilder.append("Hermes: $currentResponse\n\n")
                             currentResponse.clear()
-                            waitingForResponse = false
                             _chatLog.postValue(chatLogBuilder.toString())
+                        }
+                        if (waitingForTextResponse) {
+                            waitingForTextResponse = false
                             _sessionState.postValue(SessionState.IDLE)
                         }
                     }
@@ -113,12 +117,14 @@ class MainViewModel @Inject constructor(
                         _chatLog.postValue("${chatLogBuilder}[工具] ${event.description}...")
                     }
                     is WsEvent.Error -> {
-                        if (waitingForResponse) {
+                        if (waitingForTextResponse || inVoiceSession) {
                             chatLogBuilder.append("错误: ${event.message}\n\n")
                             currentResponse.clear()
-                            waitingForResponse = false
+                            waitingForTextResponse = false
                             _chatLog.postValue(chatLogBuilder.toString())
-                            _sessionState.postValue(SessionState.IDLE)
+                            if (waitingForTextResponse) {
+                                _sessionState.postValue(SessionState.IDLE)
+                            }
                         }
                     }
                     else -> {}
@@ -154,7 +160,7 @@ class MainViewModel @Inject constructor(
         chatLogBuilder.append("你: $text\n\n")
         _chatLog.value = "${chatLogBuilder}Hermes: ..."
         currentResponse.clear()
-        waitingForResponse = true
+        waitingForTextResponse = true
         _sessionState.value = SessionState.THINKING
 
         wsClient.sendMessage(text)
