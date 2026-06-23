@@ -149,6 +149,9 @@ class VoiceWebSocketClient @Inject constructor(
             "busy" -> {
                 _events.tryEmit(WsEvent.Busy(msg.message ?: ""))
             }
+            "system" -> {
+                _events.tryEmit(WsEvent.System(msg.content ?: ""))
+            }
             "ping" -> {
                 webSocket?.send(gson.toJson(PongMessage()))
             }
@@ -170,5 +173,6 @@ sealed class WsEvent {
     data class ApprovalRequest(val approvalId: String, val command: String, val description: String) : WsEvent()
     data class TaskComplete(val task: String, val success: Boolean) : WsEvent()
     data class Busy(val message: String) : WsEvent()
+    data class System(val content: String) : WsEvent()
     data class Error(val message: String) : WsEvent()
 }

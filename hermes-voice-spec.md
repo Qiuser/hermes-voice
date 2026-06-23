@@ -148,7 +148,11 @@ Voice Adapter 以 Hermes 插件形式运行，零源码修改，与飞书/微信
 {"type": "ping"}
 // App 收到后回复 {"type": "pong"}
 
-// 8. 错误
+// 8. 系统消息（不播报，可选显示在 UI）
+{"type": "system", "content": "💾 Self-improvement review: Memory updated"}
+// App 收到 system 类型不做 TTS，可选在界面底部静默展示或直接忽略
+
+// 9. 错误
 {"type": "error", "message": "invalid json"}
 ```
 

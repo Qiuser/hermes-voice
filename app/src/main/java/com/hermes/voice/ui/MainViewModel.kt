@@ -113,6 +113,11 @@ class MainViewModel @Inject constructor(
                         chatLogBuilder.append("系统: ${event.message}\n\n")
                         _chatLog.postValue(chatLogBuilder.toString())
                     }
+                    is WsEvent.System -> {
+                        // 系统消息不播报，静默显示
+                        chatLogBuilder.append("${event.content}\n\n")
+                        _chatLog.postValue(chatLogBuilder.toString())
+                    }
                     is WsEvent.ToolStart -> {
                         _chatLog.postValue("${chatLogBuilder}[工具] ${event.description}...")
                     }

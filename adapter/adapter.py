@@ -229,6 +229,43 @@ class VoiceAdapter(BasePlatformAdapter):
         self._app = None
         logger.info("[Voice] Disconnected")
 
+    # System message prefixes that should NOT be sent as voice delta
+    _SYSTEM_MSG_PREFIXES = (
+        "⚠️", "🔊", "💾", "📬", "⏳", "📊", "🔎", "↻", "┌", "├", "└", "│",
+        "✓ ", "hermes-", "WARNING", "ERROR", "INFO",
+    )
+    _SYSTEM_MSG_PATTERNS = (
+        "File-mutation verifier",
+        "Self-improvement review",
+        "No home channel",
+        "home channel",
+        "Queued for",
+        "Audio: /",
+        "audio_cache/",
+        ".mp3",
+        ".ogg",
+        "Memory updated",
+        "memory updated",
+        "skill_view",
+        "Tool Search:",
+        "Context limit:",
+    )
+
+    def _is_system_message(self, content: str) -> bool:
+        """Return True if content is a system/status message, not agent reply."""
+        stripped = content.strip()
+        if not stripped:
+            return True
+        # Check prefixes
+        for prefix in self._SYSTEM_MSG_PREFIXES:
+            if stripped.startswith(prefix):
+                return True
+        # Check patterns
+        for pattern in self._SYSTEM_MSG_PATTERNS:
+            if pattern in stripped:
+                return True
+        return False
+
     async def send(
         self,
         chat_id: str,
@@ -239,10 +276,18 @@ class VoiceAdapter(BasePlatformAdapter):
         """Send agent reply to the voice app client.
 
         chat_id is the device_id of the target client.
+        Filters out system messages — only real agent text replies are pushed as delta.
         """
         client = self._clients.get(chat_id)
         if not client:
             return SendResult(success=False, error=f"Device {chat_id} not connected")
+
+        # Filter out system/status messages
+        if self._is_system_message(content):
+            logger.debug("[Voice] Filtered system message: %s", content[:80])
+            # Send as system type so App can optionally show in UI but not TTS
+            await client.send_json({"type": "system", "content": content[:200]})
+            return SendResult(success=True, message_id=str(uuid.uuid4()))
 
         # For voice mode, split content into streaming deltas by sentence
         sentences = self._split_sentences(content)
