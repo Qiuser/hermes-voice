@@ -81,8 +81,9 @@ class SpeechRecognizerManager @Inject constructor(
         val config = VadModelConfig(
             sileroVadModelConfig = SileroVadModelConfig(
                 model = "$MODEL_DIR/silero_vad.onnx",
-                minSilenceDuration = 1.0f,
-                minSpeechDuration = 0.3f,
+                minSilenceDuration = 2.0f,  // 2秒静默才视为说完
+                minSpeechDuration = 0.5f,   // 至少0.5秒才算有效语音
+                maxSpeechDuration = 15.0f,  // 最多录15秒
             ),
             sampleRate = SAMPLE_RATE,
             numThreads = 1,
@@ -130,7 +131,11 @@ class SpeechRecognizerManager @Inject constructor(
             val allSamples = mutableListOf<Float>()
             var speechDetected = false
             var silenceFrames = 0
-            val maxSilenceFrames = (SAMPLE_RATE * 3) / (bufferSize / 2) // ~3秒无声超时
+            val maxSilenceFrames = (SAMPLE_RATE * 5) / (bufferSize / 2) // ~5秒无声超时（未说话时）
+
+            // 预缓冲区：保留最近 1 秒的音频，防止开头被截
+            val preBufferFrames = (SAMPLE_RATE * 1.0f).toInt() / (bufferSize / 2) + 1
+            val preBuffer = ArrayDeque<FloatArray>(preBufferFrames + 1)
 
             while (isActive) {
                 val read = audioRecord?.read(buffer, 0, buffer.size) ?: break
@@ -143,20 +148,31 @@ class SpeechRecognizerManager @Inject constructor(
                 vad?.acceptWaveform(samples)
 
                 if (vad?.isSpeechDetected() == true) {
-                    speechDetected = true
+                    if (!speechDetected) {
+                        speechDetected = true
+                        // 把预缓冲区的音频加进来（包含开头部分）
+                        for (frame in preBuffer) {
+                            allSamples.addAll(frame.toList())
+                        }
+                        preBuffer.clear()
+                    }
                     silenceFrames = 0
                     allSamples.addAll(samples.toList())
                 } else if (speechDetected) {
-                    silenceFrames++
                     allSamples.addAll(samples.toList())
-
-                    // 说话后静默超过阈值 → 识别
-                    if (silenceFrames >= maxSilenceFrames || vad?.front() != null) {
+                    // VAD 认为说完了（静默超过 minSilenceDuration）
+                    if (!vad!!.empty()) {
+                        // VAD 内部已经分好了一段完整语音
                         break
                     }
                 } else {
+                    // 还没开始说话，维护预缓冲区
+                    preBuffer.addLast(samples.clone())
+                    if (preBuffer.size > preBufferFrames) {
+                        preBuffer.removeFirst()
+                    }
                     silenceFrames++
-                    if (silenceFrames >= maxSilenceFrames * 2) {
+                    if (silenceFrames >= maxSilenceFrames) {
                         // 一直没说话，超时
                         Log.d(TAG, "No speech detected, timeout")
                         _events.tryEmit(SttEvent.Error(0, "语音超时"))

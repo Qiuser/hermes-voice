@@ -97,6 +97,8 @@ class MainViewModel @Inject constructor(
                     is WsEvent.Delta -> {
                         currentResponse.append(event.content)
                         _chatLog.postValue("${chatLogBuilder}Hermes: $currentResponse")
+                        // 文字模式也播报 TTS（测试用）
+                        voiceSessionManager.feedTtsToken(event.content)
                     }
                     is WsEvent.End -> {
                         if (currentResponse.isNotEmpty()) {
@@ -104,6 +106,7 @@ class MainViewModel @Inject constructor(
                             currentResponse.clear()
                             _chatLog.postValue(chatLogBuilder.toString())
                         }
+                        voiceSessionManager.finishTts()
                         if (waitingForTextResponse) {
                             waitingForTextResponse = false
                             _sessionState.postValue(SessionState.IDLE)

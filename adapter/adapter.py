@@ -79,15 +79,15 @@ logger = logging.getLogger(__name__)
 DEFAULT_WS_PORT = 8650
 MAX_MESSAGE_LENGTH = 2000  # Voice replies should be short
 
-# Voice mode system prompt hint
+# Platform hint — don't mention "voice" to avoid triggering server-side TTS
 VOICE_PLATFORM_HINT = (
-    "You are communicating via voice (speech-to-text input, text-to-speech output). "
-    "Rules: 1) Keep replies under 3 sentences and 80 characters total. "
+    "You are in brief-reply mode. Rules: "
+    "1) Keep replies under 3 sentences and 80 characters. "
     "2) No markdown, code blocks, or list formatting. "
     "3) Use conversational spoken language. "
-    "4) Lead with the key point. Details can be sent to Feishu: say '详细信息我发飞书给你'. "
-    "5) For confirmations, one sentence is enough: '好的，开始部署了'. "
-    "6) For long content, summarize first, then ask if the user wants details."
+    "4) Lead with the key point. For details say '详细信息我发飞书给你'. "
+    "5) For confirmations, one sentence: '好的，开始部署了'. "
+    "6) For long content, summarize first, ask if user wants details."
 )
 
 
@@ -146,6 +146,49 @@ class VoiceAdapter(BasePlatformAdapter):
 
     supports_code_blocks = False
     REQUIRES_EDIT_FINALIZE = False
+
+    def supports_draft_streaming(self, chat_type=None, metadata=None) -> bool:
+        """Voice adapter supports real-time streaming via WebSocket."""
+        return True
+
+    async def send_draft(self, chat_id: str, draft_id: int, content: str, metadata=None) -> "SendResult":
+        """Stream partial content to the voice app in real-time.
+
+        Called by gateway as agent generates tokens. `content` is cumulative
+        (grows each call). We track what was already sent and push only the new part.
+        Strips the streaming cursor character (▉) which is for visual platforms only.
+        """
+        client = self._clients.get(chat_id)
+        if not client:
+            return SendResult(success=True)
+
+        # Strip streaming cursor character
+        content = content.rstrip(" \u2589")
+
+        # Track last sent position per chat_id+draft_id
+        key = f"{chat_id}:{draft_id}"
+        if not hasattr(self, "_draft_offsets"):
+            self._draft_offsets = {}
+        last_offset = self._draft_offsets.get(key, 0)
+        new_content = content[last_offset:]
+
+        if new_content:
+            await client.send_json({"type": "delta", "content": new_content})
+            self._draft_offsets[key] = len(content)
+
+        return SendResult(success=True)
+
+    def _should_auto_tts_for_chat(self, chat_id: str) -> bool:
+        """Voice platform never does server-side TTS — App handles TTS locally."""
+        return False
+
+    async def play_tts(self, *args, **kwargs) -> "SendResult":
+        """Disabled — voice app does TTS on device."""
+        return SendResult(success=True)
+
+    async def send_voice(self, *args, **kwargs) -> "SendResult":
+        """Disabled — voice app does TTS on device."""
+        return SendResult(success=True)
 
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform("voice"))
@@ -229,43 +272,6 @@ class VoiceAdapter(BasePlatformAdapter):
         self._app = None
         logger.info("[Voice] Disconnected")
 
-    # System message prefixes that should NOT be sent as voice delta
-    _SYSTEM_MSG_PREFIXES = (
-        "⚠️", "🔊", "💾", "📬", "⏳", "📊", "🔎", "↻", "┌", "├", "└", "│",
-        "✓ ", "hermes-", "WARNING", "ERROR", "INFO",
-    )
-    _SYSTEM_MSG_PATTERNS = (
-        "File-mutation verifier",
-        "Self-improvement review",
-        "No home channel",
-        "home channel",
-        "Queued for",
-        "Audio: /",
-        "audio_cache/",
-        ".mp3",
-        ".ogg",
-        "Memory updated",
-        "memory updated",
-        "skill_view",
-        "Tool Search:",
-        "Context limit:",
-    )
-
-    def _is_system_message(self, content: str) -> bool:
-        """Return True if content is a system/status message, not agent reply."""
-        stripped = content.strip()
-        if not stripped:
-            return True
-        # Check prefixes
-        for prefix in self._SYSTEM_MSG_PREFIXES:
-            if stripped.startswith(prefix):
-                return True
-        # Check patterns
-        for pattern in self._SYSTEM_MSG_PATTERNS:
-            if pattern in stripped:
-                return True
-        return False
-
     async def send(
         self,
         chat_id: str,
@@ -273,28 +279,36 @@ class VoiceAdapter(BasePlatformAdapter):
         reply_to: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
-        """Send agent reply to the voice app client.
+        """Send final content to the voice app client.
 
-        chat_id is the device_id of the target client.
-        Filters out system messages — only real agent text replies are pushed as delta.
+        If streaming was active (send_draft was called), just send end marker.
+        If no streaming happened, push the full content as delta + end.
         """
         client = self._clients.get(chat_id)
         if not client:
             return SendResult(success=False, error=f"Device {chat_id} not connected")
 
-        # Filter out system/status messages
-        if self._is_system_message(content):
-            logger.debug("[Voice] Filtered system message: %s", content[:80])
-            # Send as system type so App can optionally show in UI but not TTS
-            await client.send_json({"type": "system", "content": content[:200]})
+        content = (content or "").strip()
+        if not content:
             return SendResult(success=True, message_id=str(uuid.uuid4()))
 
-        # For voice mode, split content into streaming deltas by sentence
-        sentences = self._split_sentences(content)
-        for sentence in sentences:
-            ok = await client.send_json({"type": "delta", "content": sentence})
-            if not ok:
-                return SendResult(success=False, error="WebSocket send failed")
+        # Check if this content was already streamed via send_draft
+        already_streamed = False
+        if hasattr(self, "_draft_offsets"):
+            # Find any draft key for this chat that sent content
+            for key in list(self._draft_offsets.keys()):
+                if key.startswith(f"{chat_id}:"):
+                    offset = self._draft_offsets.pop(key)
+                    if offset > 0:
+                        already_streamed = True
+
+        if not already_streamed:
+            # No streaming happened — send full content as delta
+            sentences = self._split_sentences(content)
+            for sentence in sentences:
+                ok = await client.send_json({"type": "delta", "content": sentence})
+                if not ok:
+                    return SendResult(success=False, error="WebSocket send failed")
 
         # Send end marker
         await client.send_json({"type": "end", "finish_reason": "stop"})

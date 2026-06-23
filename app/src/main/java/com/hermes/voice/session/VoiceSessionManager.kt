@@ -122,10 +122,10 @@ class VoiceSessionManager @Inject constructor(
                             transitionTo(SessionState.SPEAKING)
                         }
                         _response.tryEmit(event.content)
-                        ttsManager.feedToken(event.content)
+                        // TTS 由 ViewModel 统一驱动，这里不再重复 feed
                     }
                     is WsEvent.End -> {
-                        ttsManager.finishStream()
+                        // TTS finishStream 也由 ViewModel 驱动
                     }
                     is WsEvent.Busy -> {
                         ttsManager.speakImmediate(event.message)
@@ -153,5 +153,14 @@ class VoiceSessionManager @Inject constructor(
         wsJob?.cancel()
         sttManager.destroy()
         ttsManager.destroy()
+    }
+
+    /** 文字模式下也可调用 TTS 播报 */
+    fun feedTtsToken(content: String) {
+        ttsManager.feedToken(content)
+    }
+
+    fun finishTts() {
+        ttsManager.finishStream()
     }
 }

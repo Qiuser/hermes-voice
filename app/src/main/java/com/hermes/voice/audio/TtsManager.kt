@@ -8,7 +8,7 @@ import android.util.Log
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
-import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsMatchaModelConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -27,7 +27,8 @@ class TtsManager @Inject constructor(
     companion object {
         private const val TAG = "VoiceTTS"
         private const val TTS_MODEL_DIR = "sherpa-onnx-tts"
-        private const val SAMPLE_RATE = 22050
+        private const val SAMPLE_RATE = 16000
+        private const val SPEAKER_ID = 0
     }
 
     private var tts: OfflineTts? = null
@@ -48,16 +49,25 @@ class TtsManager @Inject constructor(
 
     fun init() {
         try {
+            // espeak-ng-data 需要在文件系统上（英文音素数据）
+            val dataDir = extractDataDir("$TTS_MODEL_DIR/espeak-ng-data", "espeak-ng-data", "matcha-zh-en-v1")
+
             val config = OfflineTtsConfig(
                 model = OfflineTtsModelConfig(
-                    vits = OfflineTtsVitsModelConfig(
-                        model = "$TTS_MODEL_DIR/model.onnx",
+                    matcha = OfflineTtsMatchaModelConfig(
+                        acousticModel = "$TTS_MODEL_DIR/model-steps-3.onnx",
+                        vocoder = "$TTS_MODEL_DIR/vocos.onnx",
                         lexicon = "$TTS_MODEL_DIR/lexicon.txt",
                         tokens = "$TTS_MODEL_DIR/tokens.txt",
+                        dataDir = dataDir,
+                        noiseScale = 0.3f,
+                        lengthScale = 1.0f,
                     ),
                     numThreads = 2,
-                    debug = true,
+                    debug = false,
                 ),
+                ruleFsts = "$TTS_MODEL_DIR/phone-zh.fst,$TTS_MODEL_DIR/date-zh.fst,$TTS_MODEL_DIR/number-zh.fst",
+                maxNumSentences = 1,
             )
             tts = OfflineTts(assetManager = context.assets, config = config)
             isReady = true
@@ -66,6 +76,59 @@ class TtsManager @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "TTS init failed", e)
             _events.tryEmit(TtsEvent.Error("TTS 初始化失败: ${e.message}"))
+        }
+    }
+
+    /**
+     * 将 assets 子目录解压到 app 内部存储，返回文件系统路径。
+     */
+    private fun extractDataDir(assetPath: String, dirName: String, version: String): String {
+        val targetDir = java.io.File(context.filesDir, dirName)
+        val versionFile = java.io.File(targetDir, ".version")
+
+        if (targetDir.exists() && versionFile.exists() && versionFile.readText() == version) {
+            return targetDir.absolutePath
+        }
+
+        Log.d(TAG, "Extracting $assetPath to ${targetDir.absolutePath}")
+        targetDir.deleteRecursively()
+        targetDir.mkdirs()
+
+        copyAssetDir(assetPath, targetDir)
+        versionFile.writeText(version)
+
+        Log.d(TAG, "$dirName extracted")
+        return targetDir.absolutePath
+    }
+
+    private fun copyAssetDir(assetPath: String, targetDir: java.io.File) {
+        val assets = context.assets
+        val list = assets.list(assetPath) ?: return
+
+        if (list.isEmpty()) {
+            // 是文件，直接复制
+            assets.open(assetPath).use { input ->
+                java.io.File(targetDir.parent!!, targetDir.name).outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+        } else {
+            // 是目录，递归
+            targetDir.mkdirs()
+            for (item in list) {
+                val childAssetPath = "$assetPath/$item"
+                val childTarget = java.io.File(targetDir, item)
+                val childList = assets.list(childAssetPath)
+                if (childList != null && childList.isNotEmpty()) {
+                    copyAssetDir(childAssetPath, childTarget)
+                } else {
+                    assets.open(childAssetPath).use { input ->
+                        childTarget.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -132,21 +195,34 @@ class TtsManager @Inject constructor(
 
     private fun speakSentence(text: String) {
         val engine = tts ?: return
-        Log.d(TAG, "Speaking: '$text', sid=0, speed=1.0")
+        Log.d(TAG, "Speaking: '$text'")
 
-        val audio = engine.generate(text = text, sid = 0, speed = 1.0f)
-        Log.d(TAG, "Generated ${audio.samples.size} samples at ${audio.sampleRate}Hz")
+        val audio = engine.generate(text = text, sid = SPEAKER_ID, speed = 1.0f)
         if (audio.samples.isEmpty()) return
 
         val sampleRate = audio.sampleRate
         ensureAudioTrack(sampleRate)
 
+        // 裁掉开头静音，直接输出
+        val trimmed = trimLeadingSilence(audio.samples)
+
         // 转 PCM 16-bit
-        val pcm = ShortArray(audio.samples.size) {
-            (audio.samples[it] * 32767).toInt().coerceIn(-32768, 32767).toShort()
+        val pcm = ShortArray(trimmed.size) {
+            (trimmed[it] * 32767).toInt().coerceIn(-32768, 32767).toShort()
         }
 
         audioTrack?.write(pcm, 0, pcm.size)
+    }
+
+    private fun trimLeadingSilence(samples: FloatArray, threshold: Float = 0.01f): FloatArray {
+        var startIndex = 0
+        for (i in samples.indices) {
+            if (kotlin.math.abs(samples[i]) > threshold) {
+                startIndex = maxOf(0, i - (SAMPLE_RATE / 100))
+                break
+            }
+        }
+        return if (startIndex > 0) samples.copyOfRange(startIndex, samples.size) else samples
     }
 
     private fun ensureAudioTrack(sampleRate: Int) {
@@ -180,8 +256,16 @@ class TtsManager @Inject constructor(
     }
 
     private fun releaseAudioTrack() {
-        audioTrack?.stop()
-        audioTrack?.release()
+        try {
+            audioTrack?.stop()
+        } catch (e: Exception) {
+            Log.w(TAG, "AudioTrack stop error: ${e.message}")
+        }
+        try {
+            audioTrack?.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "AudioTrack release error: ${e.message}")
+        }
         audioTrack = null
     }
 
