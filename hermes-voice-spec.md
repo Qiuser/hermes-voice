@@ -564,45 +564,113 @@ def generate_xfyun_url(api_key, api_secret):
 5. 录音结束后发送结束帧，等待最终识别结果
 6. 最终结果作为 `{"type": "message", "text": "xxx"}` 发给 Voice Adapter
 
-### 讯飞 WebSocket 协议简述
+### 讯飞 WebSocket 协议（中文识别大模型版）
+
+接口地址：`wss://iat.xf-yun.com/v1`（通过 stt_token 返回的 url 已包含鉴权参数）
 
 ```json
-// App → 讯飞（首帧，带 common + business + data）
+// App → 讯飞（首帧，带 header + parameter + payload）
 {
-  "common": {"app_id": "从 stt_token 响应中不需要，URL 已包含鉴权"},
-  "business": {
-    "language": "zh_cn",
-    "domain": "iat",
-    "accent": "mandarin",
-    "ptt": 1,
-    "eos": 3000,
-    "vad_eos": 3000
+  "header": {
+    "app_id": "1c51d8ed",
+    "status": 0
   },
-  "data": {
-    "status": 0,
-    "format": "audio/L16;rate=16000",
-    "encoding": "raw",
-    "audio": "<base64 PCM>"
+  "parameter": {
+    "iat": {
+      "domain": "slm",
+      "language": "zh_cn",
+      "accent": "mandarin",
+      "eos": 6000,
+      "dwa": "wpgs",
+      "result": {
+        "encoding": "utf8",
+        "compress": "raw",
+        "format": "json"
+      }
+    }
+  },
+  "payload": {
+    "audio": {
+      "encoding": "raw",
+      "sample_rate": 16000,
+      "channels": 1,
+      "bit_depth": 16,
+      "seq": 1,
+      "status": 0,
+      "audio": "<base64 PCM 1280字节>"
+    }
   }
 }
 
-// App → 讯飞（中间帧）
-{"data": {"status": 1, "format": "audio/L16;rate=16000", "encoding": "raw", "audio": "<base64>"}}
+// App → 讯飞（中间帧，不需要 parameter）
+{
+  "header": {"app_id": "1c51d8ed", "status": 1},
+  "payload": {
+    "audio": {
+      "encoding": "raw",
+      "sample_rate": 16000,
+      "channels": 1,
+      "bit_depth": 16,
+      "seq": 2,
+      "status": 1,
+      "audio": "<base64 PCM>"
+    }
+  }
+}
 
 // App → 讯飞（末帧）
-{"data": {"status": 2, "format": "audio/L16;rate=16000", "encoding": "raw", "audio": ""}}
+{
+  "header": {"app_id": "1c51d8ed", "status": 2},
+  "payload": {
+    "audio": {
+      "encoding": "raw",
+      "sample_rate": 16000,
+      "channels": 1,
+      "bit_depth": 16,
+      "seq": 999,
+      "status": 2,
+      "audio": ""
+    }
+  }
+}
 
-// 讯飞 → App（识别结果）
-{"data": {"status": 1, "result": {"ws": [{"cw": [{"w": "你好"}]}]}}}
-// status=2 时为最终结果
+// 讯飞 → App（识别结果，text 为 base64 编码的 JSON）
+{
+  "header": {"code": 0, "message": "success", "sid": "xxx", "status": 1},
+  "payload": {
+    "result": {
+      "text": "<base64 编码的 JSON>",
+      "seq": 1,
+      "status": 1
+    }
+  }
+}
+// header.status=2 时为最终结果
+
+// text base64 解码后的结构：
+// {"sn":1, "ls":false, "ws":[{"bg":0, "cw":[{"w":"重启"}]}, {"bg":0, "cw":[{"w":"nginx"}]}]}
+// 拼接所有 ws[].cw[].w 得到完整文字
+
+// 动态修正（dwa=wpgs 时）:
+// {"pgs":"apd", ...}  → 追加到之前结果
+// {"pgs":"rpl", "rg":[2,5], ...}  → 替换第2到第5个结果
 ```
 
-### 讯飞语音听写限制
+**关键参数说明：**
+- `domain: "slm"` — 使用大模型引擎（区别于标准版的 "iat"）
+- `dwa: "wpgs"` — 开启动态修正，识别过程中会修正前面的错误
+- `eos: 6000` — 静音 6 秒后自动停止识别
+- `app_id` — 从 stt_token 响应中获取
+- 每帧发送 1280 字节 PCM，间隔 40ms
+
+### 讯飞中文识别大模型限制
 
 - **单次最长 60 秒**（超时自动断开，App 需在 60s 内完成录音）
-- 音频格式：PCM 16kHz 16bit 单声道
+- 音频格式：PCM 16kHz 16bit 单声道（encoding=raw）或 MP3（encoding=lame）
+- 每帧数据：1280 字节，间隔 40ms
 - 签名 URL 有效期 5 分钟（过期需重新请求 `request_stt_token`）
-- 免费额度：每日 500 次（个人用足够）
+- 支持中英混合识别（docker、nginx、jenkins 等技术术语可正确识别）
+- 支持 202 种方言免切换
 
 ### App 端系统消息过滤
 
