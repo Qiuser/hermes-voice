@@ -34,6 +34,8 @@ class SettingsActivity : AppCompatActivity() {
         binding.etApiUrl.setText(apiConfig.wsUrl)
         binding.etApiToken.setText(apiConfig.voiceToken)
         binding.etDeviceId.setText(apiConfig.deviceId)
+        binding.switchWakeWord.isChecked = apiConfig.wakeWordEnabled
+        binding.switchAutoContinue.isChecked = apiConfig.autoContinueEnabled
     }
 
     private fun setupSave() {
@@ -55,6 +57,8 @@ class SettingsActivity : AppCompatActivity() {
             apiConfig.wsUrl = url
             apiConfig.voiceToken = token
             apiConfig.deviceId = deviceId
+            apiConfig.wakeWordEnabled = binding.switchWakeWord.isChecked
+            apiConfig.autoContinueEnabled = binding.switchAutoContinue.isChecked
             Toast.makeText(this, "配置已保存", Toast.LENGTH_SHORT).show()
             finish()
         }

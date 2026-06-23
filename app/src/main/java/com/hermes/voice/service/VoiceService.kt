@@ -14,6 +14,8 @@ import android.view.KeyEvent
 import androidx.core.app.NotificationCompat
 import com.hermes.voice.MainActivity
 import com.hermes.voice.R
+import com.hermes.voice.audio.WakeWordDetector
+import com.hermes.voice.network.ApiConfig
 import com.hermes.voice.network.ConnectionManager
 import com.hermes.voice.session.SessionState
 import com.hermes.voice.session.VoiceSessionManager
@@ -36,6 +38,8 @@ class VoiceService : Service() {
 
     @Inject lateinit var connectionManager: ConnectionManager
     @Inject lateinit var voiceSessionManager: VoiceSessionManager
+    @Inject lateinit var wakeWordDetector: WakeWordDetector
+    @Inject lateinit var apiConfig: ApiConfig
 
     private var mediaSession: MediaSessionCompat? = null
     private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
@@ -49,6 +53,7 @@ class VoiceService : Service() {
         setupMediaSession()
         connectionManager.start()
         observeState()
+        setupWakeWord()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -63,9 +68,22 @@ class VoiceService : Service() {
     override fun onDestroy() {
         Log.d(TAG, "onDestroy")
         mediaSession?.release()
+        wakeWordDetector.destroy()
         connectionManager.stop()
         voiceSessionManager.destroy()
         super.onDestroy()
+    }
+
+    private fun setupWakeWord() {
+        wakeWordDetector.setOnWakeWordDetected {
+            Log.d(TAG, "Wake word detected!")
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                toggleSession()
+            }
+        }
+        if (apiConfig.wakeWordEnabled) {
+            wakeWordDetector.start()
+        }
     }
 
     private fun playStartTone() {
@@ -143,6 +161,10 @@ class VoiceService : Service() {
             voiceSessionManager.state.collect { state ->
                 val statusText = state.displayName
                 updateNotification(statusText)
+                // 对话结束后恢复唤醒检测
+                if (state == SessionState.IDLE && apiConfig.wakeWordEnabled) {
+                    wakeWordDetector.resume()
+                }
             }
         }
     }

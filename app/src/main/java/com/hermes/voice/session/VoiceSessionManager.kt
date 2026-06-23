@@ -5,6 +5,7 @@ import com.hermes.voice.audio.SpeechRecognizerManager
 import com.hermes.voice.audio.SttEvent
 import com.hermes.voice.audio.TtsEvent
 import com.hermes.voice.audio.TtsManager
+import com.hermes.voice.network.ApiConfig
 import com.hermes.voice.network.VoiceWebSocketClient
 import com.hermes.voice.network.WsEvent
 import android.util.Log
@@ -24,7 +25,8 @@ class VoiceSessionManager @Inject constructor(
     private val sttManager: SpeechRecognizerManager,
     private val ttsManager: TtsManager,
     private val wsClient: VoiceWebSocketClient,
-    private val audioFocusManager: AudioFocusManager
+    private val audioFocusManager: AudioFocusManager,
+    private val apiConfig: ApiConfig
 ) {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
 
@@ -104,12 +106,18 @@ class VoiceSessionManager @Inject constructor(
                 when (event) {
                     is TtsEvent.AllDone -> {
                         if (_state.value == SessionState.SPEAKING) {
-                            // 播报完成 → 暂停 0.5 秒 → 提示音 → 继续监听
-                            kotlinx.coroutines.delay(500)
-                            ttsManager.playBeep(500, 100)
-                            kotlinx.coroutines.delay(150)
-                            transitionTo(SessionState.LISTENING)
-                            sttManager.startListening()
+                            if (apiConfig.autoContinueEnabled) {
+                                // 播报完成 → 暂停 0.5 秒 → 提示音 → 继续监听
+                                kotlinx.coroutines.delay(500)
+                                ttsManager.playBeep(500, 100)
+                                kotlinx.coroutines.delay(150)
+                                transitionTo(SessionState.LISTENING)
+                                sttManager.startListening()
+                            } else {
+                                // 不自动继续，回到待命
+                                transitionTo(SessionState.IDLE)
+                                audioFocusManager.releaseFocus()
+                            }
                         }
                     }
                     is TtsEvent.Error -> {

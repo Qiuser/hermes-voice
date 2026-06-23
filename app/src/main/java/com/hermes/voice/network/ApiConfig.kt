@@ -35,6 +35,14 @@ class ApiConfig @Inject constructor(
         get() = prefs.getString(KEY_DEVICE_ID, "") ?: ""
         set(value) = prefs.edit().putString(KEY_DEVICE_ID, value).apply()
 
+    var wakeWordEnabled: Boolean
+        get() = prefs.getBoolean(KEY_WAKE_WORD, false)
+        set(value) = prefs.edit().putBoolean(KEY_WAKE_WORD, value).apply()
+
+    var autoContinueEnabled: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_CONTINUE, true)
+        set(value) = prefs.edit().putBoolean(KEY_AUTO_CONTINUE, value).apply()
+
     val isConfigured: Boolean
         get() = wsUrl.isNotBlank() && voiceToken.isNotBlank() && deviceId.isNotBlank()
 
@@ -42,5 +50,7 @@ class ApiConfig @Inject constructor(
         private const val KEY_WS_URL = "ws_url"
         private const val KEY_VOICE_TOKEN = "voice_token"
         private const val KEY_DEVICE_ID = "device_id"
+        private const val KEY_WAKE_WORD = "wake_word_enabled"
+        private const val KEY_AUTO_CONTINUE = "auto_continue_enabled"
     }
 }
