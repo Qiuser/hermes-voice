@@ -108,6 +108,12 @@ class VoiceWebSocketClient @Inject constructor(
         webSocket?.send(gson.toJson(msg))
     }
 
+    fun requestSttToken() {
+        if (!authenticated) return
+        val msg = RequestSttTokenMessage()
+        webSocket?.send(gson.toJson(msg))
+    }
+
     private fun handleMessage(text: String) {
         val msg = try {
             gson.fromJson(text, ServerMessage::class.java)
@@ -150,7 +156,18 @@ class VoiceWebSocketClient @Inject constructor(
                 _events.tryEmit(WsEvent.Busy(msg.message ?: ""))
             }
             "system" -> {
-                _events.tryEmit(WsEvent.System(msg.content ?: ""))
+                msg.content?.let { _events.tryEmit(WsEvent.System(it)) }
+            }
+            "stt_token" -> {
+                if (!msg.url.isNullOrBlank()) {
+                    _events.tryEmit(WsEvent.SttToken(
+                        provider = msg.provider ?: "",
+                        url = msg.url,
+                        expiresIn = msg.expiresIn ?: 300
+                    ))
+                } else {
+                    _events.tryEmit(WsEvent.Error("STT 凭据获取失败: ${msg.error}"))
+                }
             }
             "ping" -> {
                 webSocket?.send(gson.toJson(PongMessage()))
@@ -174,5 +191,6 @@ sealed class WsEvent {
     data class TaskComplete(val task: String, val success: Boolean) : WsEvent()
     data class Busy(val message: String) : WsEvent()
     data class System(val content: String) : WsEvent()
+    data class SttToken(val provider: String, val url: String, val expiresIn: Int) : WsEvent()
     data class Error(val message: String) : WsEvent()
 }

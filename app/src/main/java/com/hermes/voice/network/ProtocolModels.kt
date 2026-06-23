@@ -28,6 +28,10 @@ data class CommandMessage(
     val cmd: String // "stop" | "new"
 )
 
+data class RequestSttTokenMessage(
+    val type: String = "request_stt_token"
+)
+
 data class PongMessage(
     val type: String = "pong"
 )
@@ -55,5 +59,11 @@ data class ServerMessage(
     val task: String? = null,
     val success: Boolean? = null,
     // busy / error
-    val message: String? = null
+    val message: String? = null,
+    // stt_token
+    val provider: String? = null,
+    val url: String? = null,
+    @SerializedName("expires_in")
+    val expiresIn: Int? = null,
+    val error: String? = null,
 )

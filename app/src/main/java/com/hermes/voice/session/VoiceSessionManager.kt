@@ -122,6 +122,14 @@ class VoiceSessionManager @Inject constructor(
         wsJob = scope.launch {
             wsClient.events.collect { event ->
                 when (event) {
+                    is WsEvent.Connected -> {
+                        // 连接成功后请求 STT 凭据
+                        wsClient.requestSttToken()
+                    }
+                    is WsEvent.SttToken -> {
+                        // 收到讯飞凭据，设置给 STT 管理器
+                        sttManager.setSttToken(event.url, "1c51d8ed")
+                    }
                     is WsEvent.Delta -> {
                         if (_state.value == SessionState.THINKING) {
                             transitionTo(SessionState.SPEAKING)

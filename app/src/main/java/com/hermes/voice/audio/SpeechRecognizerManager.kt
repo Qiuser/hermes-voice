@@ -44,6 +44,10 @@ class SpeechRecognizerManager @Inject constructor(
 
     private var isInitialized = false
 
+    // 讯飞在线 STT
+    private var xfyunUrl: String? = null
+    private var xfyunAppId: String? = null
+
     fun initialize() {
         if (isInitialized) return
         try {
@@ -56,6 +60,17 @@ class SpeechRecognizerManager @Inject constructor(
             _events.tryEmit(SttEvent.Error(-1, "语音引擎初始化失败: ${e.message}"))
         }
     }
+
+    /**
+     * 设置讯飞在线 STT 凭据
+     */
+    fun setSttToken(url: String, appId: String) {
+        xfyunUrl = url
+        xfyunAppId = appId
+        Log.d(TAG, "Xfyun STT token set, appId=$appId")
+    }
+
+    fun hasSttToken(): Boolean = !xfyunUrl.isNullOrBlank()
 
     private fun initRecognizer() {
         val config = OfflineRecognizerConfig(
@@ -81,9 +96,9 @@ class SpeechRecognizerManager @Inject constructor(
         val config = VadModelConfig(
             sileroVadModelConfig = SileroVadModelConfig(
                 model = "$MODEL_DIR/silero_vad.onnx",
-                minSilenceDuration = 2.0f,  // 2秒静默才视为说完
-                minSpeechDuration = 0.5f,   // 至少0.5秒才算有效语音
-                maxSpeechDuration = 15.0f,  // 最多录15秒
+                minSilenceDuration = 2.0f,
+                minSpeechDuration = 0.5f,
+                maxSpeechDuration = 15.0f,
             ),
             sampleRate = SAMPLE_RATE,
             numThreads = 1,
@@ -100,25 +115,155 @@ class SpeechRecognizerManager @Inject constructor(
             if (!isInitialized) return
         }
 
-        Log.d(TAG, "startListening()")
+        Log.d(TAG, "startListening(), online=${hasSttToken()}")
         _events.tryEmit(SttEvent.Ready)
 
+        if (hasSttToken()) {
+            startOnlineRecognition()
+        } else {
+            startOfflineRecognition()
+        }
+    }
+
+    // ========== 在线模式（讯飞）==========
+
+    private fun startOnlineRecognition() {
+        val url = xfyunUrl ?: return
+        val appId = xfyunAppId ?: return
+
         val bufferSize = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
+            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
 
         audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            bufferSize
+            MediaRecorder.AudioSource.MIC, SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize
         )
 
         if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e(TAG, "AudioRecord init failed")
+            _events.tryEmit(SttEvent.Error(-1, "录音初始化失败"))
+            return
+        }
+
+        audioRecord?.startRecording()
+        _events.tryEmit(SttEvent.SpeechStart)
+
+        var xfyunClient: XfyunSttClient? = null
+        var finalResult: String? = null
+        var hasError = false
+
+        xfyunClient = XfyunSttClient(
+            wsUrl = url,
+            appId = appId,
+            onPartialResult = { text ->
+                _events.tryEmit(SttEvent.PartialResult(text))
+            },
+            onFinalResult = { text ->
+                finalResult = text
+            },
+            onError = { msg ->
+                hasError = true
+                Log.e(TAG, "Xfyun error: $msg")
+            }
+        )
+
+        xfyunClient.connect()
+
+        recordingJob = scope.launch {
+            val buffer = ShortArray(640) // 40ms @16kHz
+            var speechDetected = false
+            var silenceFrames = 0
+            val maxSilenceFrames = (SAMPLE_RATE * 5) / 640 // 5秒无声超时
+
+            // 预缓冲
+            val preBufferFrames = (SAMPLE_RATE * 1.0f).toInt() / 640 + 1
+            val preBuffer = ArrayDeque<ShortArray>(preBufferFrames + 1)
+
+            while (isActive && !hasError) {
+                val read = audioRecord?.read(buffer, 0, buffer.size) ?: break
+                if (read <= 0) continue
+
+                // VAD 检测
+                val samples = FloatArray(read) { buffer[it] / 32768.0f }
+                vad?.acceptWaveform(samples)
+
+                if (vad?.isSpeechDetected() == true) {
+                    if (!speechDetected) {
+                        speechDetected = true
+                        // 发送预缓冲的音频
+                        for (frame in preBuffer) {
+                            xfyunClient.sendAudioFrame(frame, frame.size)
+                        }
+                        preBuffer.clear()
+                    }
+                    silenceFrames = 0
+                    xfyunClient.sendAudioFrame(buffer.copyOf(read), read)
+                } else if (speechDetected) {
+                    xfyunClient.sendAudioFrame(buffer.copyOf(read), read)
+                    if (!vad!!.empty()) {
+                        // VAD 判定说话结束
+                        break
+                    }
+                } else {
+                    // 未说话，维护预缓冲
+                    preBuffer.addLast(buffer.copyOf(read))
+                    if (preBuffer.size > preBufferFrames) {
+                        preBuffer.removeFirst()
+                    }
+                    silenceFrames++
+                    if (silenceFrames >= maxSilenceFrames) {
+                        Log.d(TAG, "No speech detected, timeout")
+                        _events.tryEmit(SttEvent.Error(0, "语音超时"))
+                        xfyunClient.close()
+                        stopRecording()
+                        vad?.reset()
+                        return@launch
+                    }
+                }
+            }
+
+            // 发送结束帧
+            stopRecording()
+            _events.tryEmit(SttEvent.SpeechEnd)
+            xfyunClient.sendEndFrame()
+
+            // 等待最终结果（最多 5 秒）
+            var waitMs = 0
+            while (finalResult == null && !hasError && waitMs < 5000) {
+                kotlinx.coroutines.delay(100)
+                waitMs += 100
+            }
+
+            vad?.reset()
+
+            if (hasError) {
+                // 讯飞出错，降级到本地
+                Log.d(TAG, "Xfyun failed, no fallback audio available")
+                _events.tryEmit(SttEvent.Error(-1, "在线识别失败"))
+            } else if (finalResult != null && finalResult!!.isNotBlank()) {
+                Log.d(TAG, "Xfyun result: $finalResult")
+                _events.tryEmit(SttEvent.Result(finalResult!!))
+            } else {
+                _events.tryEmit(SttEvent.Error(-1, "未识别到内容"))
+            }
+
+            xfyunClient.close()
+        }
+    }
+
+    // ========== 离线模式（SenseVoice）==========
+
+    private fun startOfflineRecognition() {
+        val bufferSize = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
+        )
+
+        audioRecord = AudioRecord(
+            MediaRecorder.AudioSource.MIC, SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferSize
+        )
+
+        if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
             _events.tryEmit(SttEvent.Error(-1, "录音初始化失败"))
             return
         }
@@ -131,9 +276,8 @@ class SpeechRecognizerManager @Inject constructor(
             val allSamples = mutableListOf<Float>()
             var speechDetected = false
             var silenceFrames = 0
-            val maxSilenceFrames = (SAMPLE_RATE * 5) / (bufferSize / 2) // ~5秒无声超时（未说话时）
+            val maxSilenceFrames = (SAMPLE_RATE * 5) / (bufferSize / 2)
 
-            // 预缓冲区：保留最近 1 秒的音频，防止开头被截
             val preBufferFrames = (SAMPLE_RATE * 1.0f).toInt() / (bufferSize / 2) + 1
             val preBuffer = ArrayDeque<FloatArray>(preBufferFrames + 1)
 
@@ -141,16 +285,12 @@ class SpeechRecognizerManager @Inject constructor(
                 val read = audioRecord?.read(buffer, 0, buffer.size) ?: break
                 if (read <= 0) continue
 
-                // 转为 float [-1, 1]
                 val samples = FloatArray(read) { buffer[it] / 32768.0f }
-
-                // 送入 VAD
                 vad?.acceptWaveform(samples)
 
                 if (vad?.isSpeechDetected() == true) {
                     if (!speechDetected) {
                         speechDetected = true
-                        // 把预缓冲区的音频加进来（包含开头部分）
                         for (frame in preBuffer) {
                             allSamples.addAll(frame.toList())
                         }
@@ -160,37 +300,32 @@ class SpeechRecognizerManager @Inject constructor(
                     allSamples.addAll(samples.toList())
                 } else if (speechDetected) {
                     allSamples.addAll(samples.toList())
-                    // VAD 认为说完了（静默超过 minSilenceDuration）
                     if (!vad!!.empty()) {
-                        // VAD 内部已经分好了一段完整语音
                         break
                     }
                 } else {
-                    // 还没开始说话，维护预缓冲区
                     preBuffer.addLast(samples.clone())
                     if (preBuffer.size > preBufferFrames) {
                         preBuffer.removeFirst()
                     }
                     silenceFrames++
                     if (silenceFrames >= maxSilenceFrames) {
-                        // 一直没说话，超时
                         Log.d(TAG, "No speech detected, timeout")
                         _events.tryEmit(SttEvent.Error(0, "语音超时"))
                         stopRecording()
+                        vad?.reset()
                         return@launch
                     }
                 }
             }
 
-            // 停止录音
             stopRecording()
             _events.tryEmit(SttEvent.SpeechEnd)
 
-            // 执行识别
             if (allSamples.isNotEmpty()) {
                 val result = recognize(allSamples.toFloatArray())
                 if (result.isNotBlank()) {
-                    Log.d(TAG, "Recognition result: $result")
+                    Log.d(TAG, "Offline result: $result")
                     _events.tryEmit(SttEvent.Result(result))
                 } else {
                     _events.tryEmit(SttEvent.Error(-1, "未识别到内容"))
@@ -199,7 +334,6 @@ class SpeechRecognizerManager @Inject constructor(
                 _events.tryEmit(SttEvent.Error(-1, "未识别到语音"))
             }
 
-            // 重置 VAD
             vad?.reset()
         }
     }

@@ -97,8 +97,10 @@ class MainViewModel @Inject constructor(
                     is WsEvent.Delta -> {
                         currentResponse.append(event.content)
                         _chatLog.postValue("${chatLogBuilder}Hermes: $currentResponse")
-                        // 文字模式也播报 TTS（测试用）
-                        voiceSessionManager.feedTtsToken(event.content)
+                        // 文字模式也播报 TTS（过滤系统消息）
+                        if (shouldTts(event.content)) {
+                            voiceSessionManager.feedTtsToken(event.content)
+                        }
                     }
                     is WsEvent.End -> {
                         if (currentResponse.isNotEmpty()) {
@@ -183,5 +185,20 @@ class MainViewModel @Inject constructor(
         super.onCleared()
         voiceObserveJob?.cancel()
         // 不 stop connectionManager，由 VoiceService 管理
+    }
+
+    companion object {
+        private val systemPatterns = listOf(
+            "Self-improvement review",
+            "Memory updated",
+            "User profile updated",
+            "Skill library updated",
+            "File-mutation verifier",
+            "No home channel",
+        )
+
+        fun shouldTts(content: String): Boolean {
+            return systemPatterns.none { content.contains(it) }
+        }
     }
 }
