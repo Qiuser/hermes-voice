@@ -466,6 +466,9 @@ class VoiceAdapter(BasePlatformAdapter):
         elif msg_type == "pong":
             pass  # heartbeat response, nothing to do
 
+        elif msg_type == "request_stt_token":
+            await self._handle_stt_token_request(client)
+
     async def _process_user_message(self, client: VoiceClient, text: str) -> None:
         """Route user message through the gateway message pipeline."""
         source = self.build_source(
@@ -533,6 +536,69 @@ class VoiceAdapter(BasePlatformAdapter):
         if current.strip():
             sentences.append(current.strip())
         return sentences if sentences else [text]
+
+    # ──────────────────────────────────────────────────────────────────────
+    # STT token generation (讯飞)
+    # ──────────────────────────────────────────────────────────────────────
+
+    async def _handle_stt_token_request(self, client: VoiceClient) -> None:
+        """Generate a signed 讯飞 WebSocket URL and return to the App."""
+        import base64
+        import hashlib
+        import hmac as hmac_mod
+        from datetime import datetime as dt
+        from wsgiref.handlers import format_date_time
+        from time import mktime
+        from urllib.parse import urlencode
+
+        api_key = os.getenv("XFYUN_API_KEY", "")
+        api_secret = os.getenv("XFYUN_API_SECRET", "")
+
+        if not api_key or not api_secret:
+            await client.send_json({
+                "type": "stt_token",
+                "provider": "xfyun",
+                "url": "",
+                "error": "XFYUN_API_KEY or XFYUN_API_SECRET not configured"
+            })
+            return
+
+        try:
+            host = "iat.xf-yun.com"
+            path = "/v1"
+            now = dt.now()
+            date = format_date_time(mktime(now.timetuple()))
+
+            signature_origin = f"host: {host}\ndate: {date}\nGET {path} HTTP/1.1"
+            signature_sha = hmac_mod.new(
+                api_secret.encode(), signature_origin.encode(), hashlib.sha256
+            ).digest()
+            signature = base64.b64encode(signature_sha).decode()
+
+            authorization_origin = (
+                f'api_key="{api_key}", algorithm="hmac-sha256", '
+                f'headers="host date request-line", signature="{signature}"'
+            )
+            authorization = base64.b64encode(authorization_origin.encode()).decode()
+
+            params = {"authorization": authorization, "date": date, "host": host}
+            url = f"wss://{host}{path}?{urlencode(params)}"
+
+            await client.send_json({
+                "type": "stt_token",
+                "provider": "xfyun",
+                "url": url,
+                "app_id": os.getenv("XFYUN_APP_ID", ""),
+                "expires_in": 300,
+            })
+        except Exception as e:
+            logger.warning("[Voice] Failed to generate STT token: %s", e)
+            await client.send_json({
+                "type": "stt_token",
+                "provider": "xfyun",
+                "url": "",
+                "error": str(e),
+            })
 
     async def _heartbeat_loop(self, interval: float = 25.0) -> None:
         """Send periodic ping to all connected clients."""
