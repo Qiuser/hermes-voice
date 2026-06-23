@@ -107,26 +107,29 @@ class WakeWordDetector @Inject constructor(
 
         detectJob = scope.launch {
             val buffer = ShortArray(1600) // 100ms @16kHz
-            while (isActive && isRunning) {
-                val read = audioRecord?.read(buffer, 0, buffer.size) ?: break
-                if (read <= 0) continue
+            try {
+                while (isActive && isRunning) {
+                    val read = audioRecord?.read(buffer, 0, buffer.size) ?: break
+                    if (read <= 0) continue
 
-                val samples = FloatArray(read) { buffer[it] / 32768.0f }
-                stream.acceptWaveform(samples, SAMPLE_RATE)
+                    val samples = FloatArray(read) { buffer[it] / 32768.0f }
+                    stream.acceptWaveform(samples, SAMPLE_RATE)
 
-                while (keywordSpotter!!.isReady(stream)) {
-                    keywordSpotter!!.decode(stream)
+                    while (keywordSpotter!!.isReady(stream)) {
+                        keywordSpotter!!.decode(stream)
+                    }
+
+                    val keyword = keywordSpotter!!.getResult(stream).keyword
+                    if (keyword.isNotBlank()) {
+                        Log.d(TAG, "Wake word detected: $keyword")
+                        stopRecording()
+                        onWakeWordDetected?.invoke()
+                        break
+                    }
                 }
-
-                val keyword = keywordSpotter!!.getResult(stream).keyword
-                if (keyword.isNotBlank()) {
-                    Log.d(TAG, "Wake word detected: $keyword")
-                    // 暂停检测，触发回调
-                    stopRecording()
-                    onWakeWordDetected?.invoke()
-                    // 重新开始检测（等语音对话结束后）
-                    break
-                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Detection error: ${e.message}", e)
+                stopRecording()
             }
         }
     }
