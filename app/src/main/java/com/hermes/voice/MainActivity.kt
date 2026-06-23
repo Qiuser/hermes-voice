@@ -12,6 +12,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
 import com.hermes.voice.databinding.ActivityMainBinding
+import com.hermes.voice.service.VoiceService
 import com.hermes.voice.session.SessionState
 import com.hermes.voice.ui.MainViewModel
 import com.hermes.voice.ui.SettingsActivity
@@ -42,11 +43,21 @@ class MainActivity : AppCompatActivity() {
         requestPermissions()
         setupUI()
         observeState()
+        startVoiceService()
     }
 
     override fun onResume() {
         super.onResume()
         viewModel.checkConfig()
+    }
+
+    private fun startVoiceService() {
+        val intent = Intent(this, VoiceService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
     }
 
     private fun requestPermissions() {

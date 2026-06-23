@@ -144,9 +144,7 @@ class MainViewModel @Inject constructor(
     fun checkConfig() {
         val configured = apiConfig.isConfigured
         _configValid.value = configured
-        if (configured && connectionManager.connectionState.value == ConnectionState.DISCONNECTED) {
-            connectionManager.start()
-        }
+        // 连接由 VoiceService 管理，这里只更新 UI 状态
     }
 
     fun toggleVoiceSession() {
@@ -184,6 +182,6 @@ class MainViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         voiceObserveJob?.cancel()
-        connectionManager.stop()
+        // 不 stop connectionManager，由 VoiceService 管理
     }
 }
