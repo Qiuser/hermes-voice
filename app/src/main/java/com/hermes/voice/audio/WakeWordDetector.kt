@@ -115,16 +115,17 @@ class WakeWordDetector @Inject constructor(
                     val samples = FloatArray(read) { buffer[it] / 32768.0f }
                     stream.acceptWaveform(samples, SAMPLE_RATE)
 
-                    while (keywordSpotter!!.isReady(stream)) {
+                    if (keywordSpotter!!.isReady(stream)) {
                         keywordSpotter!!.decode(stream)
-                    }
 
-                    val keyword = keywordSpotter!!.getResult(stream).keyword
-                    if (keyword.isNotBlank()) {
-                        Log.d(TAG, "Wake word detected: $keyword")
-                        stopRecording()
-                        onWakeWordDetected?.invoke()
-                        break
+                        val result = keywordSpotter!!.getResult(stream)
+                        if (result.keyword.isNotBlank()) {
+                            Log.d(TAG, "Wake word detected: ${result.keyword}")
+                            keywordSpotter!!.reset(stream)
+                            stopRecording()
+                            onWakeWordDetected?.invoke()
+                            break
+                        }
                     }
                 }
             } catch (e: Exception) {
