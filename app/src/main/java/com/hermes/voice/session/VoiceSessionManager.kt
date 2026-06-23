@@ -7,6 +7,7 @@ import com.hermes.voice.audio.TtsEvent
 import com.hermes.voice.audio.TtsManager
 import com.hermes.voice.network.VoiceWebSocketClient
 import com.hermes.voice.network.WsEvent
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -70,6 +71,7 @@ class VoiceSessionManager @Inject constructor(
             sttManager.events.collect { event ->
                 when (event) {
                     is SttEvent.Result -> {
+                        Log.d("VoiceSession", "STT result: ${event.text}, sending to WS")
                         _transcript.tryEmit(event.text)
                         transitionTo(SessionState.THINKING)
                         wsClient.sendMessage(event.text)
@@ -78,6 +80,7 @@ class VoiceSessionManager @Inject constructor(
                         _transcript.tryEmit(event.text)
                     }
                     is SttEvent.Error -> {
+                        Log.d("VoiceSession", "STT error: ${event.message}")
                         if (_state.value == SessionState.LISTENING) {
                             _error.tryEmit(event.message)
                             stopSession()

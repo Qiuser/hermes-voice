@@ -54,16 +54,14 @@ class TtsManager @Inject constructor(
                         model = "$TTS_MODEL_DIR/model.onnx",
                         lexicon = "$TTS_MODEL_DIR/lexicon.txt",
                         tokens = "$TTS_MODEL_DIR/tokens.txt",
-                        dataDir = "$TTS_MODEL_DIR/dict",
                     ),
                     numThreads = 2,
-                    debug = false,
+                    debug = true,
                 ),
-                ruleFsts = "$TTS_MODEL_DIR/date.fst,$TTS_MODEL_DIR/number.fst,$TTS_MODEL_DIR/phone.fst,$TTS_MODEL_DIR/new_heteronym.fst",
             )
             tts = OfflineTts(assetManager = context.assets, config = config)
             isReady = true
-            Log.d(TAG, "Sherpa-ONNX TTS initialized, sampleRate=${tts?.sampleRate()}")
+            Log.d(TAG, "Sherpa-ONNX TTS initialized, sampleRate=${tts?.sampleRate()}, numSpeakers=${tts?.numSpeakers()}")
             _events.tryEmit(TtsEvent.Initialized)
         } catch (e: Exception) {
             Log.e(TAG, "TTS init failed", e)
@@ -134,9 +132,10 @@ class TtsManager @Inject constructor(
 
     private fun speakSentence(text: String) {
         val engine = tts ?: return
-        Log.d(TAG, "Speaking: $text")
+        Log.d(TAG, "Speaking: '$text', sid=0, speed=1.0")
 
         val audio = engine.generate(text = text, sid = 0, speed = 1.0f)
+        Log.d(TAG, "Generated ${audio.samples.size} samples at ${audio.sampleRate}Hz")
         if (audio.samples.isEmpty()) return
 
         val sampleRate = audio.sampleRate
