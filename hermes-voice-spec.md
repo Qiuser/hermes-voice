@@ -102,15 +102,11 @@ Voice Adapter 以 Hermes 插件形式运行，零源码修改，与飞书/微信
 // 1. 鉴权（连接后必须第一条发送，10秒超时）
 {"type": "auth", "token": "70665a739889a0a1ea761728eb4162919a15754e1ee33380fb6a36be5c85889b", "device_id": "my_phone_001"}
 
-// 2. 发送消息（文字输入）
+// 2. 发送消息（文字输入或讯飞识别后的文字）
 {"type": "message", "text": "发下信封管理后台"}
 
-// 3. 发送语音（服务端 STT 识别）
-{"type": "audio", "format": "pcm", "sample_rate": 16000, "data": "<base64 编码的 PCM 音频>"}
-// 服务端收到后调用在线 STT API 识别，识别完成后：
-//   - 返回 {"type": "stt_result", "text": "重启 nginx 服务"} 给 App 确认
-//   - 然后自动将识别文字作为用户消息进入 agent 流程
-//   - 如果识别失败返回 {"type": "stt_result", "text": "", "error": "识别失败"}
+// 3. 请求 STT 临时凭据
+{"type": "request_stt_token"}
 
 // 4. 审批回复
 {"type": "approval_response", "approval_id": "uuid-xxx", "choice": "once"}
@@ -159,12 +155,11 @@ Voice Adapter 以 Hermes 插件形式运行，零源码修改，与飞书/微信
 {"type": "system", "content": "💾 Self-improvement review: Memory updated"}
 // App 收到 system 类型不做 TTS，可选在界面底部静默展示或直接忽略
 
-// 9. 语音识别结果（服务端 STT 返回）
-{"type": "stt_result", "text": "重启 nginx 服务"}
-// App 收到后在 chatLog 显示"你: xxx"，然后等待 agent 回复（delta/end）
-// 如果识别失败：
-{"type": "stt_result", "text": "", "error": "识别失败"}
-// App 收到后 TTS 播报错误提示
+// 9. STT 临时凭据响应
+{"type": "stt_token", "provider": "xfyun", "url": "wss://iat-api.xfyun.cn/v2/iat?authorization=xxx&date=xxx&host=iat-api.xfyun.cn", "expires_in": 300}
+// App 拿到 url 后直接连讯飞 WebSocket 做流式识别
+// 如果凭据生成失败：
+{"type": "stt_token", "provider": "xfyun", "url": "", "error": "API key not configured"}
 
 // 10. 错误
 {"type": "error", "message": "invalid json"}
@@ -213,7 +208,7 @@ STT 降级策略:
 |------|------|------|
 | 语言 | Kotlin | 原生性能，硬件控制最强 |
 | 最低 API | Android 10 (API 29) | 覆盖 95%+ 设备 |
-| STT | Android SpeechRecognizer | 免费、离线可用、延迟低 |
+| STT | 讯飞语音听写 Android SDK | 中文识别精准、支持离线、流式实时 |
 | TTS | Android TextToSpeech | 免费、离线、即时 |
 | 网络 | OkHttp 4.x WebSocket | 成熟稳定 |
 | 后台 | Foreground Service (TYPE_MEDIA_PLAYBACK) | 保活 + 蓝牙监听 |
@@ -463,70 +458,159 @@ implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 6. Android 14+ 要求 Foreground Service 声明 `foregroundServiceType="mediaPlayback"`
 7. 蓝牙按键与音乐播放器竞争时需合理管理 MediaSession 优先级
 8. 生产环境必须走 WSS（nginx 反代加 TLS），不要裸 WS 暴露到公网
-9. **服务端 STT**：App 录音完成后将 PCM 音频 base64 编码通过 `{"type":"audio",...}` 发给服务端，服务端负责调用在线 STT API（如 Azure Speech / 讯飞）识别后返回 `stt_result`。本地 SenseVoice 作为离线降级方案保留。
+9. **STT 策略**：优先使用在线 STT（讯飞），App 直接调用；离线时降级为本地 SenseVoice
 
 ---
 
-## 服务端 STT 方案说明（待实现）
+## 在线 STT 方案（讯飞实时语音转写）
 
 ### 背景
 
-本地离线 STT 模型（SenseVoice、Paraformer）对中文语境中夹杂的英文技术术语（nginx、jenkins、docker 等）识别能力极差。需要服务端接入在线 STT API 来解决。
+本地离线 STT 模型（SenseVoice、Paraformer）对中文语境中夹杂的英文技术术语（nginx、jenkins、docker 等）识别能力极差。采用讯飞在线 STT API 解决，App 端直接调用，服务端负责鉴权。
 
-### 协议流程
+### 方案架构
 
 ```
-App 录音完成
+App 按蓝牙键 → 录音
   ↓
-App 发送: {"type": "audio", "format": "pcm", "sample_rate": 16000, "data": "<base64>"}
+App 向 Voice Adapter 请求 STT 临时凭据
   ↓
-服务端收到 audio 消息
+Voice Adapter 用讯飞 AppID/APIKey/APISecret 生成签名 URL → 返回给 App
   ↓
-服务端调用在线 STT API（Azure/讯飞/Google）
+App 直接连讯飞 WebSocket（wss://iat-api.xfyun.cn/v2/iat?authorization=xxx&...）
   ↓
-识别成功 → 服务端返回: {"type": "stt_result", "text": "重启 nginx 服务"}
-         → 服务端自动将 text 作为用户消息进入 agent 流程
-         → 后续正常走 delta/end 回复
+App 边录音边流式发送音频到讯飞 → 讯飞实时返回识别结果
   ↓
-识别失败 → 服务端返回: {"type": "stt_result", "text": "", "error": "识别失败"}
+App 界面实时显示识别文字
+  ↓
+识别完成 → App 发送 {"type": "message", "text": "重启 nginx"} 给 Voice Adapter
+  ↓
+正常走 agent 流程 → delta/end 回复 → TTS 播报
 ```
 
-### 音频格式
+### 协议扩展
 
-| 参数 | 值 |
-|------|------|
-| 格式 | PCM（原始采样，无压缩头） |
-| 采样率 | 16000 Hz |
-| 位深 | 16-bit signed integer |
-| 声道 | 单声道（mono） |
-| 编码 | base64 |
-| 典型大小 | 5 秒音频 ≈ 160KB PCM ≈ 213KB base64 |
+#### App → 服务端
+
+```json
+// 请求 STT 临时凭据（App 启动时或凭据过期时）
+{"type": "request_stt_token"}
+```
+
+#### 服务端 → App
+
+```json
+// 返回讯飞签名 URL（有效期几分钟）
+{
+  "type": "stt_token",
+  "provider": "xfyun",
+  "url": "wss://iat-api.xfyun.cn/v2/iat?authorization=xxx&date=xxx&host=iat-api.xfyun.cn",
+  "expires_in": 300
+}
+
+// 凭据生成失败
+{"type": "stt_token", "provider": "xfyun", "url": "", "error": "API key not configured"}
+```
 
 ### 服务端实现要点
 
-1. Voice Adapter 收到 `type: "audio"` 后，base64 解码得到 PCM 字节流
-2. 调用在线 STT API：
-   - 推荐 Azure Speech（中英混合 code-switching 效果最好）
-   - 或讯飞实时语音转写（中文最强）
-   - 设置语言为 `zh-CN`，开启 code-switching / 中英混合模式
-3. 识别结果返回给 App（`stt_result`），同时自动构造 MessageEvent 进入 agent 流程
-4. 超时处理：如果 STT API 10 秒没返回，返回 error
+1. 在 Hermes 配置中添加讯飞凭据：
+```yaml
+XFYUN_APP_ID=xxx
+XFYUN_API_KEY=xxx
+XFYUN_API_SECRET=xxx
+```
 
-### App 端降级策略
+2. Voice Adapter 收到 `request_stt_token` 后：
+   - 用 API_KEY + API_SECRET 按讯飞签名算法生成鉴权 URL
+   - 签名有效期设为 5 分钟
+   - 返回完整的 WebSocket URL 给 App
+
+3. 讯飞签名算法（Python 示例）：
+```python
+import base64, hashlib, hmac, time
+from urllib.parse import urlencode
+from datetime import datetime
+from wsgiref.handlers import format_date_time
+from time import mktime
+
+def generate_xfyun_url(api_key, api_secret):
+    url = "wss://iat-api.xfyun.cn/v2/iat"
+    now = datetime.now()
+    date = format_date_time(mktime(now.timetuple()))
+    
+    signature_origin = f"host: iat-api.xfyun.cn\ndate: {date}\nGET /v2/iat HTTP/1.1"
+    signature_sha = hmac.new(
+        api_secret.encode(), signature_origin.encode(), hashlib.sha256
+    ).digest()
+    signature = base64.b64encode(signature_sha).decode()
+    
+    authorization_origin = (
+        f'api_key="{api_key}", algorithm="hmac-sha256", '
+        f'headers="host date request-line", signature="{signature}"'
+    )
+    authorization = base64.b64encode(authorization_origin.encode()).decode()
+    
+    params = {"authorization": authorization, "date": date, "host": "iat-api.xfyun.cn"}
+    return f"{url}?{urlencode(params)}"
+```
+
+### App 端实现要点
+
+1. 启动时或凭据过期时发送 `request_stt_token` 获取签名 URL
+2. 录音开始时连接讯飞 WebSocket
+3. 边录音边发送音频帧（PCM 16kHz 16bit 单声道，每次发 1280 字节 = 40ms）
+4. 讯飞返回的识别结果实时显示在界面
+5. 录音结束后发送结束帧，等待最终识别结果
+6. 最终结果作为 `{"type": "message", "text": "xxx"}` 发给 Voice Adapter
+
+### 讯飞 WebSocket 协议简述
+
+```json
+// App → 讯飞（首帧，带 common + business + data）
+{
+  "common": {"app_id": "从 stt_token 响应中不需要，URL 已包含鉴权"},
+  "business": {
+    "language": "zh_cn",
+    "domain": "iat",
+    "accent": "mandarin",
+    "ptt": 1,
+    "eos": 3000,
+    "vad_eos": 3000
+  },
+  "data": {
+    "status": 0,
+    "format": "audio/L16;rate=16000",
+    "encoding": "raw",
+    "audio": "<base64 PCM>"
+  }
+}
+
+// App → 讯飞（中间帧）
+{"data": {"status": 1, "format": "audio/L16;rate=16000", "encoding": "raw", "audio": "<base64>"}}
+
+// App → 讯飞（末帧）
+{"data": {"status": 2, "format": "audio/L16;rate=16000", "encoding": "raw", "audio": ""}}
+
+// 讯飞 → App（识别结果）
+{"data": {"status": 1, "result": {"ws": [{"cw": [{"w": "你好"}]}]}}}
+// status=2 时为最终结果
+```
+
+### 降级策略
 
 ```
-正常模式（有网络）:
-  录音 → 发 audio 到服务端 → 等 stt_result → 显示 + 等 agent 回复
+正常模式（WebSocket 连接正常 + 有 stt_token）:
+  录音 → 讯飞在线识别 → 显示文字 → 发 message → 等 agent 回复
 
-降级模式（WebSocket 断开/超时）:
-  录音 → 本地 SenseVoice 识别 → 发 message 文字 → 等 agent 回复
+降级模式（WebSocket 断开 / stt_token 获取失败 / 讯飞连接超时）:
+  录音 → 本地 SenseVoice 离线识别 → 显示文字 → 发 message → 等 agent 回复
 ```
 
 ### 推荐的在线 STT API
 
-| API | 中英混合 | 延迟 | 免费额度 |
-|-----|---------|------|---------|
-| Azure Speech | ✅ 很好 | 1-2s | 5 小时/月 |
-| 讯飞实时转写 | ✅ 好 | <1s | 有免费额度 |
-| Google Speech | ✅ 好 | 1-2s | 60 分钟/月 |
-| 阿里云 ASR | ✅ 好 | <1s | 有免费额度 |
+| API | 中英混合 | 延迟 | 免费额度 | 推荐 |
+|-----|---------|------|---------|------|
+| 讯飞实时转写 | ✅ 好 | <1s | 有免费额度 | ⭐ 首选 |
+| Azure Speech | ✅ 很好 | 1-2s | 5 小时/月 | 备选 |
+| 阿里云 ASR | ✅ 好 | <1s | 有免费额度 | 备选 |
