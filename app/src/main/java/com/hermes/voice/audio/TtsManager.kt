@@ -1,13 +1,22 @@
 package com.hermes.voice.audio
 
 import android.content.Context
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
+import android.util.Log
+import com.k2fsa.sherpa.onnx.OfflineTts
+import com.k2fsa.sherpa.onnx.OfflineTtsConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
-import java.util.Locale
-import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -15,61 +24,57 @@ import javax.inject.Singleton
 class TtsManager @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
-    private var tts: TextToSpeech? = null
+    companion object {
+        private const val TAG = "VoiceTTS"
+        private const val TTS_MODEL_DIR = "sherpa-onnx-tts"
+        private const val SAMPLE_RATE = 22050
+    }
+
+    private var tts: OfflineTts? = null
+    private var audioTrack: AudioTrack? = null
     private var isReady = false
-    private val utteranceCounter = AtomicInteger(0)
-    private var pendingUtteranceId: String? = null
+    private var speakJob: Job? = null
+    private val scope = CoroutineScope(Dispatchers.IO + Job())
 
     private val _events = MutableSharedFlow<TtsEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<TtsEvent> = _events
 
     // 分句缓冲
     private val sentenceBuffer = StringBuilder()
-    private var totalQueued = 0
-    private var totalSpoken = 0
+    private val sentenceQueue = mutableListOf<String>()
+    private var streamFinished = false
 
-    private val sentenceDelimiters = charArrayOf('。', '！', '？', '，', '；', '\n')
+    private val sentenceDelimiters = charArrayOf('。', '！', '？', '，', '；', '\n', '.', '!', '?')
 
     fun init() {
-        tts = TextToSpeech(context) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale.CHINESE
-                tts?.setSpeechRate(1.0f)
-                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String?) {
-                        _events.tryEmit(TtsEvent.SpeakStart)
-                    }
-
-                    override fun onDone(utteranceId: String?) {
-                        totalSpoken++
-                        if (utteranceId == pendingUtteranceId) {
-                            _events.tryEmit(TtsEvent.AllDone)
-                            reset()
-                        }
-                    }
-
-                    @Deprecated("Deprecated in Java")
-                    override fun onError(utteranceId: String?) {
-                        _events.tryEmit(TtsEvent.Error("TTS 播报错误"))
-                    }
-                })
-                isReady = true
-                _events.tryEmit(TtsEvent.Initialized)
-            } else {
-                _events.tryEmit(TtsEvent.Error("TTS 初始化失败"))
-            }
+        try {
+            val config = OfflineTtsConfig(
+                model = OfflineTtsModelConfig(
+                    vits = OfflineTtsVitsModelConfig(
+                        model = "$TTS_MODEL_DIR/model.onnx",
+                        lexicon = "$TTS_MODEL_DIR/lexicon.txt",
+                        tokens = "$TTS_MODEL_DIR/tokens.txt",
+                        dataDir = "$TTS_MODEL_DIR/dict",
+                    ),
+                    numThreads = 2,
+                    debug = false,
+                ),
+                ruleFsts = "$TTS_MODEL_DIR/date.fst,$TTS_MODEL_DIR/number.fst,$TTS_MODEL_DIR/phone.fst,$TTS_MODEL_DIR/new_heteronym.fst",
+            )
+            tts = OfflineTts(assetManager = context.assets, config = config)
+            isReady = true
+            Log.d(TAG, "Sherpa-ONNX TTS initialized, sampleRate=${tts?.sampleRate()}")
+            _events.tryEmit(TtsEvent.Initialized)
+        } catch (e: Exception) {
+            Log.e(TAG, "TTS init failed", e)
+            _events.tryEmit(TtsEvent.Error("TTS 初始化失败: ${e.message}"))
         }
     }
 
-    /**
-     * 流式接收 token，按标点分句后立即入队播报
-     */
     fun feedToken(token: String) {
         if (!isReady) return
-
         sentenceBuffer.append(token)
 
-        // 检查是否有完整句子可以播报
         val content = sentenceBuffer.toString()
         val lastDelimiterIndex = content.indexOfLast { it in sentenceDelimiters }
 
@@ -80,63 +85,127 @@ class TtsManager @Inject constructor(
             sentenceBuffer.append(remaining)
 
             if (sentence.isNotBlank()) {
-                speakQueued(sentence)
+                synchronized(sentenceQueue) {
+                    sentenceQueue.add(sentence)
+                }
+                ensureSpeaking()
             }
         }
     }
 
-    /**
-     * 流式结束，播报剩余缓冲内容
-     */
     fun finishStream() {
         if (!isReady) return
-
         val remaining = sentenceBuffer.toString().trim()
         if (remaining.isNotBlank()) {
-            speakQueued(remaining)
+            synchronized(sentenceQueue) {
+                sentenceQueue.add(remaining)
+            }
         }
         sentenceBuffer.clear()
+        streamFinished = true
+        ensureSpeaking()
+    }
 
-        // 标记最后一个 utterance
-        pendingUtteranceId = "utt_${utteranceCounter.get()}"
-        // 如果没有任何内容被播报，直接通知完成
-        if (totalQueued == 0) {
+    private fun ensureSpeaking() {
+        if (speakJob?.isActive == true) return
+        speakJob = scope.launch {
+            _events.tryEmit(TtsEvent.SpeakStart)
+
+            while (isActive) {
+                val sentence = synchronized(sentenceQueue) {
+                    if (sentenceQueue.isNotEmpty()) sentenceQueue.removeAt(0) else null
+                }
+
+                if (sentence != null) {
+                    speakSentence(sentence)
+                } else if (streamFinished) {
+                    break
+                } else {
+                    // 等待更多句子
+                    kotlinx.coroutines.delay(100)
+                }
+            }
+
+            streamFinished = false
+            releaseAudioTrack()
             _events.tryEmit(TtsEvent.AllDone)
-            reset()
         }
     }
 
-    private fun speakQueued(text: String) {
-        val id = "utt_${utteranceCounter.incrementAndGet()}"
-        pendingUtteranceId = id
-        totalQueued++
-        tts?.speak(text, TextToSpeech.QUEUE_ADD, null, id)
+    private fun speakSentence(text: String) {
+        val engine = tts ?: return
+        Log.d(TAG, "Speaking: $text")
+
+        val audio = engine.generate(text = text, sid = 0, speed = 1.0f)
+        if (audio.samples.isEmpty()) return
+
+        val sampleRate = audio.sampleRate
+        ensureAudioTrack(sampleRate)
+
+        // 转 PCM 16-bit
+        val pcm = ShortArray(audio.samples.size) {
+            (audio.samples[it] * 32767).toInt().coerceIn(-32768, 32767).toShort()
+        }
+
+        audioTrack?.write(pcm, 0, pcm.size)
+    }
+
+    private fun ensureAudioTrack(sampleRate: Int) {
+        if (audioTrack != null) return
+
+        val bufferSize = AudioTrack.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+
+        audioTrack = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .build()
+            )
+            .setBufferSizeInBytes(bufferSize)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+
+        audioTrack?.play()
+    }
+
+    private fun releaseAudioTrack() {
+        audioTrack?.stop()
+        audioTrack?.release()
+        audioTrack = null
     }
 
     fun stop() {
-        tts?.stop()
-        reset()
+        speakJob?.cancel()
+        speakJob = null
+        synchronized(sentenceQueue) { sentenceQueue.clear() }
+        sentenceBuffer.clear()
+        streamFinished = false
+        releaseAudioTrack()
     }
 
     fun speakImmediate(text: String) {
         if (!isReady) return
-        val id = "utt_${utteranceCounter.incrementAndGet()}"
-        pendingUtteranceId = id
-        totalQueued = 1
-        totalSpoken = 0
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
-    }
-
-    private fun reset() {
-        sentenceBuffer.clear()
-        totalQueued = 0
-        totalSpoken = 0
-        pendingUtteranceId = null
+        stop()
+        synchronized(sentenceQueue) { sentenceQueue.add(text) }
+        streamFinished = true
+        ensureSpeaking()
     }
 
     fun destroy() {
-        tts?.stop()
-        tts?.shutdown()
+        stop()
+        tts?.release()
         tts = null
         isReady = false
     }
