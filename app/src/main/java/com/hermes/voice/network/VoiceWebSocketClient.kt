@@ -163,7 +163,8 @@ class VoiceWebSocketClient @Inject constructor(
                     _events.tryEmit(WsEvent.SttToken(
                         provider = msg.provider ?: "",
                         url = msg.url,
-                        expiresIn = msg.expiresIn ?: 300
+                        expiresIn = msg.expiresIn ?: 300,
+                        appId = msg.appId ?: ""
                     ))
                 } else {
                     _events.tryEmit(WsEvent.Error("STT 凭据获取失败: ${msg.error}"))
@@ -191,6 +192,6 @@ sealed class WsEvent {
     data class TaskComplete(val task: String, val success: Boolean) : WsEvent()
     data class Busy(val message: String) : WsEvent()
     data class System(val content: String) : WsEvent()
-    data class SttToken(val provider: String, val url: String, val expiresIn: Int) : WsEvent()
+    data class SttToken(val provider: String, val url: String, val expiresIn: Int, val appId: String) : WsEvent()
     data class Error(val message: String) : WsEvent()
 }

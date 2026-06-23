@@ -65,5 +65,7 @@ data class ServerMessage(
     val url: String? = null,
     @SerializedName("expires_in")
     val expiresIn: Int? = null,
+    @SerializedName("app_id")
+    val appId: String? = null,
     val error: String? = null,
 )

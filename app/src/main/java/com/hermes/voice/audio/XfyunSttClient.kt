@@ -10,10 +10,11 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * 讯飞实时语音听写 WebSocket 客户端
- * 边录音边发送音频帧，实时返回识别结果
+ * 讯飞中文识别大模型 WebSocket 客户端（domain=slm）
+ * 接口：wss://iat.xf-yun.com/v1（鉴权参数在 URL 里）
  */
 class XfyunSttClient(
     private val wsUrl: String,
@@ -24,18 +25,18 @@ class XfyunSttClient(
 ) {
     companion object {
         private const val TAG = "XfyunSTT"
-        private const val FRAME_SIZE = 1280 // 每帧 1280 字节 = 40ms @16kHz 16bit
     }
 
     private val gson = Gson()
     private var webSocket: WebSocket? = null
     private var isFirstFrame = true
     private var isClosed = false
-    private val sentences = mutableMapOf<Int, String>() // sn → 该句文字
+    private val seqCounter = AtomicInteger(0)
+    private val sentences = mutableMapOf<Int, String>() // sn → 文字
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
     fun connect() {
@@ -47,6 +48,7 @@ class XfyunSttClient(
                 Log.d(TAG, "Connected to xfyun")
                 isFirstFrame = true
                 isClosed = false
+                seqCounter.set(0)
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
@@ -81,23 +83,27 @@ class XfyunSttClient(
         }
 
         val audio = Base64.encodeToString(bytes, Base64.NO_WRAP)
+        val seq = seqCounter.incrementAndGet()
 
         val json = if (isFirstFrame) {
             isFirstFrame = false
-            """{"common":{"app_id":"$appId"},"business":{"language":"zh_cn","domain":"iat","accent":"mandarin","ptt":1,"vad_eos":3000},"data":{"status":0,"format":"audio/L16;rate=16000","encoding":"raw","audio":"$audio"}}"""
+            // 首帧：带 header + parameter + payload
+            """{"header":{"app_id":"$appId","status":0},"parameter":{"iat":{"domain":"slm","language":"zh_cn","accent":"mandarin","eos":6000,"dwa":"wpgs","result":{"encoding":"utf8","compress":"raw","format":"json"}}},"payload":{"audio":{"encoding":"raw","sample_rate":16000,"channels":1,"bit_depth":16,"seq":$seq,"status":0,"audio":"$audio"}}}"""
         } else {
-            """{"data":{"status":1,"format":"audio/L16;rate=16000","encoding":"raw","audio":"$audio"}}"""
+            // 中间帧：只需 header + payload
+            """{"header":{"app_id":"$appId","status":1},"payload":{"audio":{"encoding":"raw","sample_rate":16000,"channels":1,"bit_depth":16,"seq":$seq,"status":1,"audio":"$audio"}}}"""
         }
 
         webSocket?.send(json)
     }
 
     /**
-     * 发送结束帧，告知讯飞录音结束
+     * 发送结束帧
      */
     fun sendEndFrame() {
         if (isClosed || webSocket == null) return
-        val json = """{"data":{"status":2,"format":"audio/L16;rate=16000","encoding":"raw","audio":""}}"""
+        val seq = seqCounter.incrementAndGet()
+        val json = """{"header":{"app_id":"$appId","status":2},"payload":{"audio":{"encoding":"raw","sample_rate":16000,"channels":1,"bit_depth":16,"seq":$seq,"status":2,"audio":""}}}"""
         webSocket?.send(json)
         Log.d(TAG, "End frame sent")
     }
@@ -111,23 +117,30 @@ class XfyunSttClient(
     private fun handleResponse(text: String) {
         try {
             val json = gson.fromJson(text, JsonObject::class.java)
-            val code = json.get("code")?.asInt ?: 0
+            val header = json.getAsJsonObject("header") ?: return
+            val code = header.get("code")?.asInt ?: 0
+
             if (code != 0) {
-                val msg = json.get("message")?.asString ?: "unknown error"
+                val msg = header.get("message")?.asString ?: "unknown error"
                 Log.e(TAG, "Error from xfyun: code=$code, msg=$msg")
                 onError("讯飞错误: $msg")
                 close()
                 return
             }
 
-            val data = json.getAsJsonObject("data") ?: return
-            val status = data.get("status")?.asInt ?: 0
-            val result = data.getAsJsonObject("result") ?: return
+            val status = header.get("status")?.asInt ?: 0
+            val payload = json.getAsJsonObject("payload") ?: return
+            val result = payload.getAsJsonObject("result") ?: return
 
-            // 解析识别文字
-            val ws = result.getAsJsonArray("ws") ?: return
-            val sn = result.get("sn")?.asInt ?: 0
-            val pgs = result.get("pgs")?.asString // "apd" = 追加, "rpl" = 替换
+            // text 是 base64 编码的 JSON
+            val textBase64 = result.get("text")?.asString ?: return
+            val textJson = String(Base64.decode(textBase64, Base64.DEFAULT))
+
+            // 解析识别结果 JSON
+            val resultObj = gson.fromJson(textJson, JsonObject::class.java)
+            val ws = resultObj.getAsJsonArray("ws") ?: return
+            val sn = resultObj.get("sn")?.asInt ?: 0
+            val pgs = resultObj.get("pgs")?.asString
 
             val segmentText = StringBuilder()
             for (i in 0 until ws.size()) {
@@ -139,14 +152,11 @@ class XfyunSttClient(
 
             Log.d(TAG, "sn=$sn pgs=$pgs segment='$segmentText' status=$status")
 
-            // 按 sn 维护每句话的内容
             if (pgs == "rpl") {
-                // 替换模式：用 rg 字段指示要替换的范围
-                val rg = result.getAsJsonArray("rg")
+                val rg = resultObj.getAsJsonArray("rg")
                 if (rg != null && rg.size() >= 2) {
                     val start = rg[0].asInt
                     val end = rg[1].asInt
-                    // 替换 start~end 的句子
                     for (i in start..end) {
                         sentences.remove(i)
                     }
@@ -154,7 +164,6 @@ class XfyunSttClient(
             }
             sentences[sn] = segmentText.toString()
 
-            // 拼接所有句子
             val fullText = sentences.toSortedMap().values.joinToString("")
             onPartialResult(fullText)
 
@@ -164,7 +173,7 @@ class XfyunSttClient(
                 close()
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Parse error: ${e.message}")
+            Log.e(TAG, "Parse error: ${e.message}", e)
         }
     }
 }

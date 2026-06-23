@@ -132,7 +132,7 @@ class VoiceSessionManager @Inject constructor(
                     }
                     is WsEvent.SttToken -> {
                         // 收到讯飞凭据，设置给 STT 管理器
-                        sttManager.setSttToken(event.url, "1c51d8ed")
+                        sttManager.setSttToken(event.url, event.appId)
                     }
                     is WsEvent.Delta -> {
                         if (_state.value == SessionState.THINKING) {
