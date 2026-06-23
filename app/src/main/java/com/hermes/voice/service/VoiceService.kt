@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.SoundPool
 import android.os.IBinder
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -39,6 +41,9 @@ class VoiceService : Service() {
 
     private var mediaSession: MediaSessionCompat? = null
     private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
+    private var soundPool: SoundPool? = null
+    private var soundStart: Int = 0
+    private var soundEnd: Int = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -46,6 +51,7 @@ class VoiceService : Service() {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification("待命中"))
         setupMediaSession()
+        setupSoundPool()
         connectionManager.start()
         observeState()
     }
@@ -62,9 +68,31 @@ class VoiceService : Service() {
     override fun onDestroy() {
         Log.d(TAG, "onDestroy")
         mediaSession?.release()
+        soundPool?.release()
         connectionManager.stop()
         voiceSessionManager.destroy()
         super.onDestroy()
+    }
+
+    private fun setupSoundPool() {
+        val attrs = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        soundPool = SoundPool.Builder()
+            .setMaxStreams(2)
+            .setAudioAttributes(attrs)
+            .build()
+        soundStart = soundPool!!.load(this, R.raw.tone_start, 1)
+        soundEnd = soundPool!!.load(this, R.raw.tone_end, 1)
+    }
+
+    private fun playStartTone() {
+        soundPool?.play(soundStart, 1.0f, 1.0f, 1, 0, 1.0f)
+    }
+
+    private fun playEndTone() {
+        soundPool?.play(soundEnd, 1.0f, 1.0f, 1, 0, 1.0f)
     }
 
     private fun setupMediaSession() {
@@ -111,9 +139,11 @@ class VoiceService : Service() {
         val currentState = voiceSessionManager.state.value
         if (currentState == SessionState.IDLE) {
             Log.d(TAG, "Starting voice session")
+            playStartTone()
             voiceSessionManager.startSession()
         } else {
             Log.d(TAG, "Stopping voice session")
+            playEndTone()
             voiceSessionManager.stopSession()
         }
     }
