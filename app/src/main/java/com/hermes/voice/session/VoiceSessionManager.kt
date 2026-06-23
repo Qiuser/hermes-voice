@@ -45,6 +45,7 @@ class VoiceSessionManager @Inject constructor(
 
     fun initialize() {
         ttsManager.init()
+        sttManager.initialize()
         observeStt()
         observeTts()
         observeWs()
