@@ -55,9 +55,8 @@ dependencies {
     implementation("com.google.dagger:hilt-android:2.51.1")
     kapt("com.google.dagger:hilt-compiler:2.51.1")
 
-    // 网络 (OkHttp SSE)
+    // 网络 (OkHttp WebSocket)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
 
     // JSON
     implementation("com.google.code.gson:gson:2.11.0")

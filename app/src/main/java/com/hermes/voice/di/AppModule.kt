@@ -1,11 +1,12 @@
 package com.hermes.voice.di
 
 import android.content.Context
-import com.hermes.voice.api.ApiConfig
-import com.hermes.voice.api.HermesApiClient
 import com.hermes.voice.audio.AudioFocusManager
 import com.hermes.voice.audio.SpeechRecognizerManager
 import com.hermes.voice.audio.TtsManager
+import com.hermes.voice.network.ApiConfig
+import com.hermes.voice.network.ConnectionManager
+import com.hermes.voice.network.VoiceWebSocketClient
 import com.hermes.voice.session.VoiceSessionManager
 import dagger.Module
 import dagger.Provides
@@ -26,8 +27,14 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideHermesApiClient(apiConfig: ApiConfig): HermesApiClient {
-        return HermesApiClient(apiConfig)
+    fun provideVoiceWebSocketClient(apiConfig: ApiConfig): VoiceWebSocketClient {
+        return VoiceWebSocketClient(apiConfig)
+    }
+
+    @Provides
+    @Singleton
+    fun provideConnectionManager(wsClient: VoiceWebSocketClient, apiConfig: ApiConfig): ConnectionManager {
+        return ConnectionManager(wsClient, apiConfig)
     }
 
     @Provides
@@ -53,9 +60,9 @@ object AppModule {
     fun provideVoiceSessionManager(
         sttManager: SpeechRecognizerManager,
         ttsManager: TtsManager,
-        apiClient: HermesApiClient,
+        wsClient: VoiceWebSocketClient,
         audioFocusManager: AudioFocusManager
     ): VoiceSessionManager {
-        return VoiceSessionManager(sttManager, ttsManager, apiClient, audioFocusManager)
+        return VoiceSessionManager(sttManager, ttsManager, wsClient, audioFocusManager)
     }
 }

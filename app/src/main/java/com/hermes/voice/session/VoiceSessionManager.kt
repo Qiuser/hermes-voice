@@ -1,12 +1,12 @@
 package com.hermes.voice.session
 
-import com.hermes.voice.api.HermesApiClient
-import com.hermes.voice.api.StreamEvent
 import com.hermes.voice.audio.AudioFocusManager
 import com.hermes.voice.audio.SpeechRecognizerManager
 import com.hermes.voice.audio.SttEvent
 import com.hermes.voice.audio.TtsEvent
 import com.hermes.voice.audio.TtsManager
+import com.hermes.voice.network.VoiceWebSocketClient
+import com.hermes.voice.network.WsEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -22,7 +22,7 @@ import javax.inject.Singleton
 class VoiceSessionManager @Inject constructor(
     private val sttManager: SpeechRecognizerManager,
     private val ttsManager: TtsManager,
-    private val apiClient: HermesApiClient,
+    private val wsClient: VoiceWebSocketClient,
     private val audioFocusManager: AudioFocusManager
 ) {
     private val scope = CoroutineScope(Dispatchers.Main + Job())
@@ -39,14 +39,15 @@ class VoiceSessionManager @Inject constructor(
     private val _error = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val error: SharedFlow<String> = _error
 
-    private var apiJob: Job? = null
     private var sttJob: Job? = null
     private var ttsJob: Job? = null
+    private var wsJob: Job? = null
 
     fun initialize() {
         ttsManager.init()
         observeStt()
         observeTts()
+        observeWs()
     }
 
     fun startSession() {
@@ -57,7 +58,6 @@ class VoiceSessionManager @Inject constructor(
     }
 
     fun stopSession() {
-        apiJob?.cancel()
         sttManager.stopListening()
         ttsManager.stop()
         audioFocusManager.releaseFocus()
@@ -71,14 +71,13 @@ class VoiceSessionManager @Inject constructor(
                     is SttEvent.Result -> {
                         _transcript.tryEmit(event.text)
                         transitionTo(SessionState.THINKING)
-                        sendToApi(event.text)
+                        wsClient.sendMessage(event.text)
                     }
                     is SttEvent.PartialResult -> {
                         _transcript.tryEmit(event.text)
                     }
                     is SttEvent.Error -> {
                         if (_state.value == SessionState.LISTENING) {
-                            // 静默超时或无匹配 → 回到空闲
                             _error.tryEmit(event.message)
                             stopSession()
                         }
@@ -110,26 +109,30 @@ class VoiceSessionManager @Inject constructor(
         }
     }
 
-    private fun sendToApi(text: String) {
-        apiJob?.cancel()
-        apiJob = scope.launch {
-            apiClient.streamChat(text).collect { event ->
+    private fun observeWs() {
+        wsJob = scope.launch {
+            wsClient.events.collect { event ->
                 when (event) {
-                    is StreamEvent.Connected -> {}
-                    is StreamEvent.Token -> {
+                    is WsEvent.Delta -> {
                         if (_state.value == SessionState.THINKING) {
                             transitionTo(SessionState.SPEAKING)
                         }
                         _response.tryEmit(event.content)
                         ttsManager.feedToken(event.content)
                     }
-                    is StreamEvent.Done -> {
+                    is WsEvent.End -> {
                         ttsManager.finishStream()
                     }
-                    is StreamEvent.Error -> {
+                    is WsEvent.Busy -> {
                         ttsManager.speakImmediate(event.message)
-                        _error.tryEmit(event.message)
                     }
+                    is WsEvent.Error -> {
+                        if (_state.value != SessionState.IDLE) {
+                            ttsManager.speakImmediate(event.message)
+                            _error.tryEmit(event.message)
+                        }
+                    }
+                    else -> {}
                 }
             }
         }
@@ -143,6 +146,7 @@ class VoiceSessionManager @Inject constructor(
         stopSession()
         sttJob?.cancel()
         ttsJob?.cancel()
+        wsJob?.cancel()
         sttManager.destroy()
         ttsManager.destroy()
     }

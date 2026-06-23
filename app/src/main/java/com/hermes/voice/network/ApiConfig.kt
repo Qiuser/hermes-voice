@@ -1,4 +1,4 @@
-package com.hermes.voice.api
+package com.hermes.voice.network
 
 import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -23,19 +23,24 @@ class ApiConfig @Inject constructor(
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
     )
 
-    var apiUrl: String
-        get() = prefs.getString(KEY_API_URL, "") ?: ""
-        set(value) = prefs.edit().putString(KEY_API_URL, value).apply()
+    var wsUrl: String
+        get() = prefs.getString(KEY_WS_URL, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_WS_URL, value).apply()
 
-    var apiToken: String
-        get() = prefs.getString(KEY_API_TOKEN, "") ?: ""
-        set(value) = prefs.edit().putString(KEY_API_TOKEN, value).apply()
+    var voiceToken: String
+        get() = prefs.getString(KEY_VOICE_TOKEN, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_VOICE_TOKEN, value).apply()
+
+    var deviceId: String
+        get() = prefs.getString(KEY_DEVICE_ID, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_DEVICE_ID, value).apply()
 
     val isConfigured: Boolean
-        get() = apiUrl.isNotBlank() && apiToken.isNotBlank()
+        get() = wsUrl.isNotBlank() && voiceToken.isNotBlank() && deviceId.isNotBlank()
 
     companion object {
-        private const val KEY_API_URL = "api_url"
-        private const val KEY_API_TOKEN = "api_token"
+        private const val KEY_WS_URL = "ws_url"
+        private const val KEY_VOICE_TOKEN = "voice_token"
+        private const val KEY_DEVICE_ID = "device_id"
     }
 }

@@ -3,8 +3,8 @@ package com.hermes.voice.ui
 import android.os.Bundle
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import com.hermes.voice.api.ApiConfig
 import com.hermes.voice.databinding.ActivitySettingsBinding
+import com.hermes.voice.network.ApiConfig
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -31,27 +31,30 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun loadCurrentConfig() {
-        binding.etApiUrl.setText(apiConfig.apiUrl)
-        binding.etApiToken.setText(apiConfig.apiToken)
+        binding.etApiUrl.setText(apiConfig.wsUrl)
+        binding.etApiToken.setText(apiConfig.voiceToken)
+        binding.etDeviceId.setText(apiConfig.deviceId)
     }
 
     private fun setupSave() {
         binding.btnSave.setOnClickListener {
             val url = binding.etApiUrl.text.toString().trim()
             val token = binding.etApiToken.text.toString().trim()
+            val deviceId = binding.etDeviceId.text.toString().trim()
 
-            if (url.isBlank() || token.isBlank()) {
-                Toast.makeText(this, "请填写完整的 API 地址和 Token", Toast.LENGTH_SHORT).show()
+            if (url.isBlank() || token.isBlank() || deviceId.isBlank()) {
+                Toast.makeText(this, "请填写完整", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            if (!url.startsWith("https://") && !url.startsWith("http://")) {
-                Toast.makeText(this, "API 地址需要以 https:// 开头", Toast.LENGTH_SHORT).show()
+            if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
+                Toast.makeText(this, "地址需要以 ws:// 或 wss:// 开头", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            apiConfig.apiUrl = url
-            apiConfig.apiToken = token
+            apiConfig.wsUrl = url
+            apiConfig.voiceToken = token
+            apiConfig.deviceId = deviceId
             Toast.makeText(this, "配置已保存", Toast.LENGTH_SHORT).show()
             finish()
         }

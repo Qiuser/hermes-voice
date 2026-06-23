@@ -4,10 +4,11 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.hermes.voice.api.ApiConfig
-import com.hermes.voice.api.ChatMessage
-import com.hermes.voice.api.HermesApiClient
-import com.hermes.voice.api.StreamEvent
+import com.hermes.voice.network.ApiConfig
+import com.hermes.voice.network.ConnectionManager
+import com.hermes.voice.network.ConnectionState
+import com.hermes.voice.network.VoiceWebSocketClient
+import com.hermes.voice.network.WsEvent
 import com.hermes.voice.session.SessionState
 import com.hermes.voice.session.VoiceSessionManager
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -18,7 +19,8 @@ import javax.inject.Inject
 @HiltViewModel
 class MainViewModel @Inject constructor(
     private val apiConfig: ApiConfig,
-    private val apiClient: HermesApiClient,
+    private val wsClient: VoiceWebSocketClient,
+    private val connectionManager: ConnectionManager,
     private val voiceSessionManager: VoiceSessionManager
 ) : ViewModel() {
 
@@ -31,14 +33,19 @@ class MainViewModel @Inject constructor(
     private val _configValid = MutableLiveData(false)
     val configValid: LiveData<Boolean> = _configValid
 
-    private var chatJob: Job? = null
+    private val _connectionStatus = MutableLiveData("未连接")
+    val connectionStatus: LiveData<String> = _connectionStatus
+
     private var voiceObserveJob: Job? = null
-    private val chatHistory = mutableListOf<ChatMessage>()
     private val chatLogBuilder = StringBuilder()
+    private val currentResponse = StringBuilder()
+    private var waitingForResponse = false
 
     init {
         checkConfig()
         initVoiceSession()
+        observeConnection()
+        observeWsEvents()
     }
 
     private fun initVoiceSession() {
@@ -51,27 +58,81 @@ class MainViewModel @Inject constructor(
                 }
             }
             launch {
-                val responseBuilder = StringBuilder()
-                voiceSessionManager.response.collect { token ->
-                    responseBuilder.append(token)
-                    _chatLog.postValue("${chatLogBuilder}Hermes: $responseBuilder")
-                }
-            }
-            launch {
                 voiceSessionManager.transcript.collect { text ->
                     _chatLog.postValue("${chatLogBuilder}你: $text")
                 }
             }
             launch {
                 voiceSessionManager.error.collect { msg ->
-                    _chatLog.postValue("${chatLogBuilder}错误: $msg")
+                    chatLogBuilder.append("错误: $msg\n\n")
+                    _chatLog.postValue(chatLogBuilder.toString())
+                }
+            }
+        }
+    }
+
+    private fun observeConnection() {
+        viewModelScope.launch {
+            connectionManager.connectionState.collect { state ->
+                val text = when (state) {
+                    ConnectionState.DISCONNECTED -> "未连接"
+                    ConnectionState.CONNECTING -> "连接中..."
+                    ConnectionState.CONNECTED -> "已连接"
+                    ConnectionState.AUTH_FAILED -> "认证失败"
+                }
+                _connectionStatus.postValue(text)
+            }
+        }
+    }
+
+    private fun observeWsEvents() {
+        viewModelScope.launch {
+            wsClient.events.collect { event ->
+                when (event) {
+                    is WsEvent.Delta -> {
+                        currentResponse.append(event.content)
+                        _chatLog.postValue("${chatLogBuilder}Hermes: $currentResponse")
+                        if (_sessionState.value == SessionState.IDLE && waitingForResponse) {
+                            _sessionState.postValue(SessionState.SPEAKING)
+                        }
+                    }
+                    is WsEvent.End -> {
+                        if (waitingForResponse) {
+                            chatLogBuilder.append("Hermes: $currentResponse\n\n")
+                            currentResponse.clear()
+                            waitingForResponse = false
+                            _chatLog.postValue(chatLogBuilder.toString())
+                            _sessionState.postValue(SessionState.IDLE)
+                        }
+                    }
+                    is WsEvent.Busy -> {
+                        chatLogBuilder.append("系统: ${event.message}\n\n")
+                        _chatLog.postValue(chatLogBuilder.toString())
+                    }
+                    is WsEvent.ToolStart -> {
+                        _chatLog.postValue("${chatLogBuilder}[工具] ${event.description}...")
+                    }
+                    is WsEvent.Error -> {
+                        if (waitingForResponse) {
+                            chatLogBuilder.append("错误: ${event.message}\n\n")
+                            currentResponse.clear()
+                            waitingForResponse = false
+                            _chatLog.postValue(chatLogBuilder.toString())
+                            _sessionState.postValue(SessionState.IDLE)
+                        }
+                    }
+                    else -> {}
                 }
             }
         }
     }
 
     fun checkConfig() {
-        _configValid.value = apiConfig.isConfigured
+        val configured = apiConfig.isConfigured
+        _configValid.value = configured
+        if (configured && connectionManager.connectionState.value == ConnectionState.DISCONNECTED) {
+            connectionManager.start()
+        }
     }
 
     fun toggleVoiceSession() {
@@ -84,54 +145,31 @@ class MainViewModel @Inject constructor(
 
     fun sendMessage(text: String) {
         if (text.isBlank()) return
-        if (!apiConfig.isConfigured) {
-            _chatLog.value = "请先在设置中配置 API 地址和 Token"
+        if (!wsClient.isConnected) {
+            chatLogBuilder.append("错误: 未连接到服务器\n\n")
+            _chatLog.value = chatLogBuilder.toString()
             return
         }
 
-        chatJob?.cancel()
-        _sessionState.value = SessionState.THINKING
-
-        // 追加用户消息到日志
         chatLogBuilder.append("你: $text\n\n")
         _chatLog.value = "${chatLogBuilder}Hermes: ..."
+        currentResponse.clear()
+        waitingForResponse = true
+        _sessionState.value = SessionState.THINKING
 
-        val responseBuilder = StringBuilder()
+        wsClient.sendMessage(text)
+    }
 
-        chatJob = viewModelScope.launch {
-            apiClient.streamChat(text, chatHistory).collect { event ->
-                when (event) {
-                    is StreamEvent.Connected -> {
-                        _sessionState.postValue(SessionState.THINKING)
-                    }
-                    is StreamEvent.Token -> {
-                        responseBuilder.append(event.content)
-                        _chatLog.postValue("${chatLogBuilder}Hermes: $responseBuilder")
-                        if (_sessionState.value == SessionState.THINKING) {
-                            _sessionState.postValue(SessionState.SPEAKING)
-                        }
-                    }
-                    is StreamEvent.Done -> {
-                        // 保存到对话历史
-                        chatHistory.add(ChatMessage(role = "user", content = text))
-                        chatHistory.add(ChatMessage(role = "assistant", content = responseBuilder.toString()))
-                        // 追加助手回复到日志
-                        chatLogBuilder.append("Hermes: $responseBuilder\n\n")
-                        _chatLog.postValue(chatLogBuilder.toString())
-                        _sessionState.postValue(SessionState.IDLE)
-                    }
-                    is StreamEvent.Error -> {
-                        chatLogBuilder.append("错误: ${event.message}\n\n")
-                        _chatLog.postValue(chatLogBuilder.toString())
-                        _sessionState.postValue(SessionState.IDLE)
-                    }
-                }
-            }
-        }
+    fun sendNewSession() {
+        wsClient.sendCommand("new")
+        chatLogBuilder.clear()
+        currentResponse.clear()
+        _chatLog.value = ""
     }
 
     override fun onCleared() {
         super.onCleared()
         voiceObserveJob?.cancel()
+        connectionManager.stop()
     }
 }

@@ -113,8 +113,12 @@ class MainActivity : AppCompatActivity() {
             binding.etInput.isEnabled = valid
             binding.btnStartSession.isEnabled = valid
             if (!valid) {
-                binding.tvStatus.text = "请先配置 API 地址和 Token"
+                binding.tvStatus.text = "请先配置连接信息"
             }
+        }
+
+        viewModel.connectionStatus.observe(this) { status ->
+            binding.tvConnection.text = status
         }
     }
 }
