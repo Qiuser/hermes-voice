@@ -159,13 +159,15 @@ class VoiceService : Service() {
 
     private fun observeState() {
         serviceScope.launch {
+            var wasActive = false
             voiceSessionManager.state.collect { state ->
                 val statusText = state.displayName
                 updateNotification(statusText)
-                // 对话结束后恢复唤醒检测
-                if (state == SessionState.IDLE && apiConfig.wakeWordEnabled) {
+                // 对话结束后恢复唤醒检测（只在从活跃状态回到 IDLE 时）
+                if (state == SessionState.IDLE && wasActive && apiConfig.wakeWordEnabled) {
                     wakeWordDetector.resume()
                 }
+                wasActive = state != SessionState.IDLE
             }
         }
     }

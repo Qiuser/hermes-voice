@@ -42,7 +42,6 @@ class WakeWordDetector @Inject constructor(
     fun start() {
         if (isRunning) return
         Log.d(TAG, "Starting wake word detection")
-
         try {
             if (keywordSpotter == null) {
                 initSpotter()
@@ -61,6 +60,12 @@ class WakeWordDetector @Inject constructor(
         detectJob?.cancel()
         detectJob = null
         stopRecording()
+    }
+
+    fun resume() {
+        if (detectJob?.isActive == true) return
+        if (!isRunning) isRunning = true
+        startDetecting()
     }
 
     private fun initSpotter() {
@@ -103,7 +108,8 @@ class WakeWordDetector @Inject constructor(
 
         audioRecord?.startRecording()
 
-        val stream = keywordSpotter!!.createStream()
+        val spotter = keywordSpotter ?: return
+        val stream = spotter.createStream()
 
         detectJob = scope.launch {
             val buffer = ShortArray(1600) // 100ms @16kHz
@@ -115,13 +121,13 @@ class WakeWordDetector @Inject constructor(
                     val samples = FloatArray(read) { buffer[it] / 32768.0f }
                     stream.acceptWaveform(samples, SAMPLE_RATE)
 
-                    if (keywordSpotter!!.isReady(stream)) {
-                        keywordSpotter!!.decode(stream)
+                    if (spotter.isReady(stream)) {
+                        spotter.decode(stream)
 
-                        val result = keywordSpotter!!.getResult(stream)
+                        val result = spotter.getResult(stream)
                         if (result.keyword.isNotBlank()) {
                             Log.d(TAG, "Wake word detected: ${result.keyword}")
-                            keywordSpotter!!.reset(stream)
+                            spotter.reset(stream)
                             stopRecording()
                             onWakeWordDetected?.invoke()
                             break
@@ -143,15 +149,6 @@ class WakeWordDetector @Inject constructor(
             Log.e(TAG, "Error stopping recording", e)
         }
         audioRecord = null
-    }
-
-    /**
-     * 语音对话结束后恢复唤醒检测
-     */
-    fun resume() {
-        if (isRunning) {
-            startDetecting()
-        }
     }
 
     fun destroy() {
