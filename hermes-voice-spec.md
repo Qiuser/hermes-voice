@@ -514,11 +514,11 @@ App 界面实时显示识别文字
 
 ### 服务端实现要点
 
-1. 在 Hermes 配置中添加讯飞凭据：
+1. 在 Hermes 配置中添加讯飞凭据（✅ 已配置）：
 ```yaml
-XFYUN_APP_ID=xxx
-XFYUN_API_KEY=xxx
-XFYUN_API_SECRET=xxx
+XFYUN_APP_ID=1c51d8ed
+XFYUN_API_KEY=（已配置在服务器 .env）
+XFYUN_API_SECRET=（已配置在服务器 .env）
 ```
 
 2. Voice Adapter 收到 `request_stt_token` 后：
@@ -595,6 +595,33 @@ def generate_xfyun_url(api_key, api_secret):
 // 讯飞 → App（识别结果）
 {"data": {"status": 1, "result": {"ws": [{"cw": [{"w": "你好"}]}]}}}
 // status=2 时为最终结果
+```
+
+### 讯飞语音听写限制
+
+- **单次最长 60 秒**（超时自动断开，App 需在 60s 内完成录音）
+- 音频格式：PCM 16kHz 16bit 单声道
+- 签名 URL 有效期 5 分钟（过期需重新请求 `request_stt_token`）
+- 免费额度：每日 500 次（个人用足够）
+
+### App 端系统消息过滤
+
+服务端无法完美区分 agent 正常回复和 gateway 后台系统通知（如 "💾 Self-improvement review: Memory updated"），
+因为两者走相同的流式推送路径。App 端收到 delta 时需自行过滤：
+
+```kotlin
+// 不播报的内容（系统通知关键词）
+val systemPatterns = listOf(
+    "Self-improvement review",
+    "Memory updated",
+    "User profile updated",
+    "Skill library updated",
+    "File-mutation verifier",
+    "No home channel",
+)
+fun shouldTts(content: String): Boolean {
+    return systemPatterns.none { content.contains(it) }
+}
 ```
 
 ### 降级策略
