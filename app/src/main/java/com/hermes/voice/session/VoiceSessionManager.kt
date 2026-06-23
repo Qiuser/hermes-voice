@@ -163,4 +163,9 @@ class VoiceSessionManager @Inject constructor(
     fun finishTts() {
         ttsManager.finishStream()
     }
+
+    /** 播放简短提示语 */
+    fun speakCue(text: String) {
+        ttsManager.speakImmediate(text)
+    }
 }

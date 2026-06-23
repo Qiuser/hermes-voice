@@ -6,8 +6,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
-import android.media.AudioAttributes
-import android.media.SoundPool
 import android.os.IBinder
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -41,9 +39,7 @@ class VoiceService : Service() {
 
     private var mediaSession: MediaSessionCompat? = null
     private val serviceScope = CoroutineScope(Dispatchers.Main + Job())
-    private var soundPool: SoundPool? = null
-    private var soundStart: Int = 0
-    private var soundEnd: Int = 0
+    private var lastButtonPressTime = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -51,7 +47,6 @@ class VoiceService : Service() {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification("待命中"))
         setupMediaSession()
-        setupSoundPool()
         connectionManager.start()
         observeState()
     }
@@ -68,31 +63,33 @@ class VoiceService : Service() {
     override fun onDestroy() {
         Log.d(TAG, "onDestroy")
         mediaSession?.release()
-        soundPool?.release()
         connectionManager.stop()
         voiceSessionManager.destroy()
         super.onDestroy()
     }
 
-    private fun setupSoundPool() {
-        val attrs = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-            .build()
-        soundPool = SoundPool.Builder()
-            .setMaxStreams(2)
-            .setAudioAttributes(attrs)
-            .build()
-        soundStart = soundPool!!.load(this, R.raw.tone_start, 1)
-        soundEnd = soundPool!!.load(this, R.raw.tone_end, 1)
+    private fun playTone(toneType: Int, durationMs: Int) {
+        Thread {
+            try {
+                val toneGen = android.media.ToneGenerator(
+                    android.media.AudioManager.STREAM_MUSIC, 100  // 100 = 最大音量
+                )
+                toneGen.startTone(toneType, durationMs)
+                Thread.sleep(durationMs.toLong() + 50)
+                toneGen.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "ToneGenerator error: ${e.message}")
+            }
+        }.start()
     }
 
     private fun playStartTone() {
-        soundPool?.play(soundStart, 1.0f, 1.0f, 1, 0, 1.0f)
+        Log.d(TAG, "playStartTone")
+        voiceSessionManager.speakCue("我在")
     }
 
     private fun playEndTone() {
-        soundPool?.play(soundEnd, 1.0f, 1.0f, 1, 0, 1.0f)
+        Log.d(TAG, "playEndTone")
     }
 
     private fun setupMediaSession() {
@@ -109,7 +106,8 @@ class VoiceService : Service() {
                     when (event.keyCode) {
                         KeyEvent.KEYCODE_HEADSETHOOK,
                         KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-                        KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                        KeyEvent.KEYCODE_MEDIA_PLAY,
+                        KeyEvent.KEYCODE_MEDIA_PAUSE -> {
                             toggleSession()
                             return true
                         }
@@ -136,15 +134,22 @@ class VoiceService : Service() {
     }
 
     private fun toggleSession() {
+        val now = System.currentTimeMillis()
+        if (now - lastButtonPressTime < 500) return
+        lastButtonPressTime = now
+
         val currentState = voiceSessionManager.state.value
         if (currentState == SessionState.IDLE) {
             Log.d(TAG, "Starting voice session")
-            playStartTone()
             voiceSessionManager.startSession()
+            // 录音启动后再播提示音（此时音频通道已稳定）
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                playStartTone()
+            }, 200)
         } else {
             Log.d(TAG, "Stopping voice session")
-            playEndTone()
             voiceSessionManager.stopSession()
+            playEndTone()
         }
     }
 
