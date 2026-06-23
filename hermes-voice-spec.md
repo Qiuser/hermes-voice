@@ -102,18 +102,25 @@ Voice Adapter 以 Hermes 插件形式运行，零源码修改，与飞书/微信
 // 1. 鉴权（连接后必须第一条发送，10秒超时）
 {"type": "auth", "token": "70665a739889a0a1ea761728eb4162919a15754e1ee33380fb6a36be5c85889b", "device_id": "my_phone_001"}
 
-// 2. 发送消息（用户语音转文字后发送）
+// 2. 发送消息（文字输入）
 {"type": "message", "text": "发下信封管理后台"}
 
-// 3. 审批回复
+// 3. 发送语音（服务端 STT 识别）
+{"type": "audio", "format": "pcm", "sample_rate": 16000, "data": "<base64 编码的 PCM 音频>"}
+// 服务端收到后调用在线 STT API 识别，识别完成后：
+//   - 返回 {"type": "stt_result", "text": "重启 nginx 服务"} 给 App 确认
+//   - 然后自动将识别文字作为用户消息进入 agent 流程
+//   - 如果识别失败返回 {"type": "stt_result", "text": "", "error": "识别失败"}
+
+// 4. 审批回复
 {"type": "approval_response", "approval_id": "uuid-xxx", "choice": "once"}
 // choice 可选值: "once" | "session" | "always" | "deny"
 
-// 4. 命令
+// 5. 命令
 {"type": "command", "cmd": "stop"}   // 中断当前任务
 {"type": "command", "cmd": "new"}    // 开新会话
 
-// 5. 心跳回复
+// 6. 心跳回复
 {"type": "pong"}
 ```
 
@@ -152,7 +159,14 @@ Voice Adapter 以 Hermes 插件形式运行，零源码修改，与飞书/微信
 {"type": "system", "content": "💾 Self-improvement review: Memory updated"}
 // App 收到 system 类型不做 TTS，可选在界面底部静默展示或直接忽略
 
-// 9. 错误
+// 9. 语音识别结果（服务端 STT 返回）
+{"type": "stt_result", "text": "重启 nginx 服务"}
+// App 收到后在 chatLog 显示"你: xxx"，然后等待 agent 回复（delta/end）
+// 如果识别失败：
+{"type": "stt_result", "text": "", "error": "识别失败"}
+// App 收到后 TTS 播报错误提示
+
+// 10. 错误
 {"type": "error", "message": "invalid json"}
 ```
 
@@ -163,10 +177,14 @@ App 启动 → WebSocket 连接 → 发送 auth → 收到 auth_ok → 就绪
                                         → 收到 auth_fail → 断开，提示用户
 
 就绪后:
-  用户按蓝牙键 → STT → 发送 message → 等待 delta/end → TTS 播报
+  用户按蓝牙键 → 录音 → 发送 audio（base64 PCM）→ 收到 stt_result → 等待 delta/end → TTS 播报
   收到 ping → 回复 pong
   收到 approval_request → TTS 播报 → STT 识别 → 发送 approval_response
   收到 task_complete → 通知栏 + TTS
+
+STT 降级策略:
+  网络正常 → 发送 audio 到服务端识别（准确率高，支持中英混合）
+  网络异常/超时 → 退回本地 SenseVoice 识别（纯中文可用）
 
 断线:
   WebSocket 断开 → 指数退避重连（1s→2s→4s→8s→max 30s）
@@ -445,3 +463,70 @@ implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 6. Android 14+ 要求 Foreground Service 声明 `foregroundServiceType="mediaPlayback"`
 7. 蓝牙按键与音乐播放器竞争时需合理管理 MediaSession 优先级
 8. 生产环境必须走 WSS（nginx 反代加 TLS），不要裸 WS 暴露到公网
+9. **服务端 STT**：App 录音完成后将 PCM 音频 base64 编码通过 `{"type":"audio",...}` 发给服务端，服务端负责调用在线 STT API（如 Azure Speech / 讯飞）识别后返回 `stt_result`。本地 SenseVoice 作为离线降级方案保留。
+
+---
+
+## 服务端 STT 方案说明（待实现）
+
+### 背景
+
+本地离线 STT 模型（SenseVoice、Paraformer）对中文语境中夹杂的英文技术术语（nginx、jenkins、docker 等）识别能力极差。需要服务端接入在线 STT API 来解决。
+
+### 协议流程
+
+```
+App 录音完成
+  ↓
+App 发送: {"type": "audio", "format": "pcm", "sample_rate": 16000, "data": "<base64>"}
+  ↓
+服务端收到 audio 消息
+  ↓
+服务端调用在线 STT API（Azure/讯飞/Google）
+  ↓
+识别成功 → 服务端返回: {"type": "stt_result", "text": "重启 nginx 服务"}
+         → 服务端自动将 text 作为用户消息进入 agent 流程
+         → 后续正常走 delta/end 回复
+  ↓
+识别失败 → 服务端返回: {"type": "stt_result", "text": "", "error": "识别失败"}
+```
+
+### 音频格式
+
+| 参数 | 值 |
+|------|------|
+| 格式 | PCM（原始采样，无压缩头） |
+| 采样率 | 16000 Hz |
+| 位深 | 16-bit signed integer |
+| 声道 | 单声道（mono） |
+| 编码 | base64 |
+| 典型大小 | 5 秒音频 ≈ 160KB PCM ≈ 213KB base64 |
+
+### 服务端实现要点
+
+1. Voice Adapter 收到 `type: "audio"` 后，base64 解码得到 PCM 字节流
+2. 调用在线 STT API：
+   - 推荐 Azure Speech（中英混合 code-switching 效果最好）
+   - 或讯飞实时语音转写（中文最强）
+   - 设置语言为 `zh-CN`，开启 code-switching / 中英混合模式
+3. 识别结果返回给 App（`stt_result`），同时自动构造 MessageEvent 进入 agent 流程
+4. 超时处理：如果 STT API 10 秒没返回，返回 error
+
+### App 端降级策略
+
+```
+正常模式（有网络）:
+  录音 → 发 audio 到服务端 → 等 stt_result → 显示 + 等 agent 回复
+
+降级模式（WebSocket 断开/超时）:
+  录音 → 本地 SenseVoice 识别 → 发 message 文字 → 等 agent 回复
+```
+
+### 推荐的在线 STT API
+
+| API | 中英混合 | 延迟 | 免费额度 |
+|-----|---------|------|---------|
+| Azure Speech | ✅ 很好 | 1-2s | 5 小时/月 |
+| 讯飞实时转写 | ✅ 好 | <1s | 有免费额度 |
+| Google Speech | ✅ 好 | 1-2s | 60 分钟/月 |
+| 阿里云 ASR | ✅ 好 | <1s | 有免费额度 |
