@@ -15,7 +15,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -40,16 +39,11 @@ class TtsManager @Inject constructor(
     private val _events = MutableSharedFlow<TtsEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<TtsEvent> = _events
 
-    // 分句缓冲
-    private val sentenceBuffer = StringBuilder()
-    private val sentenceQueue = mutableListOf<String>()
-    private var streamFinished = false
-
-    private val sentenceDelimiters = charArrayOf('。', '！', '？', '，', '；', '\n', '.', '!', '?')
+    // 收集完整回复文本，end 后一次性合成
+    private val textBuffer = StringBuilder()
 
     fun init() {
         try {
-            // espeak-ng-data 需要在文件系统上（英文音素数据）
             val dataDir = extractDataDir("$TTS_MODEL_DIR/espeak-ng-data", "espeak-ng-data", "matcha-zh-en-v1")
 
             val config = OfflineTtsConfig(
@@ -80,149 +74,70 @@ class TtsManager @Inject constructor(
     }
 
     /**
-     * 将 assets 子目录解压到 app 内部存储，返回文件系统路径。
+     * 流式接收 token，只缓存不合成
      */
-    private fun extractDataDir(assetPath: String, dirName: String, version: String): String {
-        val targetDir = java.io.File(context.filesDir, dirName)
-        val versionFile = java.io.File(targetDir, ".version")
-
-        if (targetDir.exists() && versionFile.exists() && versionFile.readText() == version) {
-            return targetDir.absolutePath
-        }
-
-        Log.d(TAG, "Extracting $assetPath to ${targetDir.absolutePath}")
-        targetDir.deleteRecursively()
-        targetDir.mkdirs()
-
-        copyAssetDir(assetPath, targetDir)
-        versionFile.writeText(version)
-
-        Log.d(TAG, "$dirName extracted")
-        return targetDir.absolutePath
-    }
-
-    private fun copyAssetDir(assetPath: String, targetDir: java.io.File) {
-        val assets = context.assets
-        val list = assets.list(assetPath) ?: return
-
-        if (list.isEmpty()) {
-            // 是文件，直接复制
-            assets.open(assetPath).use { input ->
-                java.io.File(targetDir.parent!!, targetDir.name).outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            }
-        } else {
-            // 是目录，递归
-            targetDir.mkdirs()
-            for (item in list) {
-                val childAssetPath = "$assetPath/$item"
-                val childTarget = java.io.File(targetDir, item)
-                val childList = assets.list(childAssetPath)
-                if (childList != null && childList.isNotEmpty()) {
-                    copyAssetDir(childAssetPath, childTarget)
-                } else {
-                    assets.open(childAssetPath).use { input ->
-                        childTarget.outputStream().use { output ->
-                            input.copyTo(output)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     fun feedToken(token: String) {
         if (!isReady) return
-        sentenceBuffer.append(token)
-
-        val content = sentenceBuffer.toString()
-        val lastDelimiterIndex = content.indexOfLast { it in sentenceDelimiters }
-
-        if (lastDelimiterIndex >= 0) {
-            val sentence = content.substring(0, lastDelimiterIndex + 1).trim()
-            val remaining = content.substring(lastDelimiterIndex + 1)
-            sentenceBuffer.clear()
-            sentenceBuffer.append(remaining)
-
-            if (sentence.isNotBlank()) {
-                synchronized(sentenceQueue) {
-                    sentenceQueue.add(sentence)
-                }
-                ensureSpeaking()
-            }
-        }
+        textBuffer.append(token)
     }
 
+    /**
+     * 流结束，把完整文本一次性送 TTS 合成播放
+     */
     fun finishStream() {
         if (!isReady) return
-        val remaining = sentenceBuffer.toString().trim()
-        if (remaining.isNotBlank()) {
-            synchronized(sentenceQueue) {
-                sentenceQueue.add(remaining)
-            }
-        }
-        sentenceBuffer.clear()
-        streamFinished = true
-        ensureSpeaking()
-    }
+        val text = textBuffer.toString().trim()
+        textBuffer.clear()
+        if (text.isBlank()) return
 
-    private fun ensureSpeaking() {
-        if (speakJob?.isActive == true) return
+        speakJob?.cancel()
         speakJob = scope.launch {
             _events.tryEmit(TtsEvent.SpeakStart)
-
-            while (isActive) {
-                val sentence = synchronized(sentenceQueue) {
-                    if (sentenceQueue.isNotEmpty()) sentenceQueue.removeAt(0) else null
-                }
-
-                if (sentence != null) {
-                    speakSentence(sentence)
-                } else if (streamFinished) {
-                    break
-                } else {
-                    // 等待更多句子
-                    kotlinx.coroutines.delay(100)
-                }
-            }
-
-            streamFinished = false
-            releaseAudioTrack()
+            speakText(text)
             _events.tryEmit(TtsEvent.AllDone)
         }
     }
 
-    private fun speakSentence(text: String) {
+    /**
+     * 立即播报一段文字（中断当前播放）
+     */
+    fun speakImmediate(text: String) {
+        if (!isReady) return
+        stop()
+        speakJob = scope.launch {
+            _events.tryEmit(TtsEvent.SpeakStart)
+            speakText(text)
+            _events.tryEmit(TtsEvent.AllDone)
+        }
+    }
+
+    private fun speakText(text: String) {
         val engine = tts ?: return
         Log.d(TAG, "Speaking: '$text'")
 
         val audio = engine.generate(text = text, sid = SPEAKER_ID, speed = 1.0f)
         if (audio.samples.isEmpty()) return
 
-        val sampleRate = audio.sampleRate
-        ensureAudioTrack(sampleRate)
+        ensureAudioTrack(audio.sampleRate)
 
-        // 裁掉开头静音，直接输出
-        val trimmed = trimLeadingSilence(audio.samples)
+        // 在音频前插入 50ms 极低音量噪声，防止 DAC gate 导致淡入
+        val warmupSamples = audio.sampleRate / 20 // 50ms
+        val warmup = ShortArray(warmupSamples) { 1 } // 极低振幅，人耳不可闻
+        audioTrack?.write(warmup, 0, warmup.size)
 
-        // 转 PCM 16-bit
-        val pcm = ShortArray(trimmed.size) {
-            (trimmed[it] * 32767).toInt().coerceIn(-32768, 32767).toShort()
+        // 转 PCM 16-bit 直接播放
+        val pcm = ShortArray(audio.samples.size) {
+            (audio.samples[it] * 32767).toInt().coerceIn(-32768, 32767).toShort()
         }
 
         audioTrack?.write(pcm, 0, pcm.size)
     }
 
-    private fun trimLeadingSilence(samples: FloatArray, threshold: Float = 0.01f): FloatArray {
-        var startIndex = 0
-        for (i in samples.indices) {
-            if (kotlin.math.abs(samples[i]) > threshold) {
-                startIndex = maxOf(0, i - (SAMPLE_RATE / 100))
-                break
-            }
-        }
-        return if (startIndex > 0) samples.copyOfRange(startIndex, samples.size) else samples
+    fun stop() {
+        speakJob?.cancel()
+        speakJob = null
+        textBuffer.clear()
+        // 不释放 AudioTrack，保持常驻避免淡入
     }
 
     private fun ensureAudioTrack(sampleRate: Int) {
@@ -237,7 +152,7 @@ class TtsManager @Inject constructor(
         audioTrack = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )
@@ -269,28 +184,58 @@ class TtsManager @Inject constructor(
         audioTrack = null
     }
 
-    fun stop() {
-        speakJob?.cancel()
-        speakJob = null
-        synchronized(sentenceQueue) { sentenceQueue.clear() }
-        sentenceBuffer.clear()
-        streamFinished = false
-        releaseAudioTrack()
-    }
-
-    fun speakImmediate(text: String) {
-        if (!isReady) return
-        stop()
-        synchronized(sentenceQueue) { sentenceQueue.add(text) }
-        streamFinished = true
-        ensureSpeaking()
-    }
-
     fun destroy() {
         stop()
+        releaseAudioTrack()
         tts?.release()
         tts = null
         isReady = false
+    }
+
+    private fun extractDataDir(assetPath: String, dirName: String, version: String): String {
+        val targetDir = java.io.File(context.filesDir, dirName)
+        val versionFile = java.io.File(targetDir, ".version")
+
+        if (targetDir.exists() && versionFile.exists() && versionFile.readText() == version) {
+            return targetDir.absolutePath
+        }
+
+        Log.d(TAG, "Extracting $assetPath to ${targetDir.absolutePath}")
+        targetDir.deleteRecursively()
+        targetDir.mkdirs()
+        copyAssetDir(assetPath, targetDir)
+        versionFile.writeText(version)
+        Log.d(TAG, "$dirName extracted")
+        return targetDir.absolutePath
+    }
+
+    private fun copyAssetDir(assetPath: String, targetDir: java.io.File) {
+        val assets = context.assets
+        val list = assets.list(assetPath) ?: return
+
+        if (list.isEmpty()) {
+            assets.open(assetPath).use { input ->
+                java.io.File(targetDir.parent!!, targetDir.name).outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+        } else {
+            targetDir.mkdirs()
+            for (item in list) {
+                val childAssetPath = "$assetPath/$item"
+                val childTarget = java.io.File(targetDir, item)
+                val childList = assets.list(childAssetPath)
+                if (childList != null && childList.isNotEmpty()) {
+                    copyAssetDir(childAssetPath, childTarget)
+                } else {
+                    assets.open(childAssetPath).use { input ->
+                        childTarget.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
