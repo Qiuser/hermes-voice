@@ -281,8 +281,9 @@ class VoiceAdapter(BasePlatformAdapter):
     ) -> SendResult:
         """Send final content to the voice app client.
 
-        If streaming was active (send_draft was called), just send end marker.
-        If no streaming happened, push the full content as delta + end.
+        Uses metadata['notify'] to distinguish agent replies from system notifications:
+        - notify=True → agent reply (send as delta or end if already streamed)
+        - notify absent → system notification (send as 'system' type, not TTS'd)
         """
         client = self._clients.get(chat_id)
         if not client:
@@ -292,26 +293,31 @@ class VoiceAdapter(BasePlatformAdapter):
         if not content:
             return SendResult(success=True, message_id=str(uuid.uuid4()))
 
+        is_agent_reply = bool((metadata or {}).get("notify"))
+
         # Check if this content was already streamed via send_draft
         already_streamed = False
         if hasattr(self, "_draft_offsets"):
-            # Find any draft key for this chat that sent content
             for key in list(self._draft_offsets.keys()):
                 if key.startswith(f"{chat_id}:"):
                     offset = self._draft_offsets.pop(key)
                     if offset > 0:
                         already_streamed = True
 
-        if not already_streamed:
-            # No streaming happened — send full content as delta
+        if already_streamed:
+            # Content was streamed — just send end marker
+            await client.send_json({"type": "end", "finish_reason": "stop"})
+        elif is_agent_reply:
+            # Non-streamed agent reply — send as delta + end
             sentences = self._split_sentences(content)
             for sentence in sentences:
                 ok = await client.send_json({"type": "delta", "content": sentence})
                 if not ok:
                     return SendResult(success=False, error="WebSocket send failed")
-
-        # Send end marker
-        await client.send_json({"type": "end", "finish_reason": "stop"})
+            await client.send_json({"type": "end", "finish_reason": "stop"})
+        else:
+            # System notification — send as system type, App won't TTS this
+            await client.send_json({"type": "system", "content": content[:300]})
 
         return SendResult(success=True, message_id=str(uuid.uuid4()))
 

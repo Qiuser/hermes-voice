@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -28,6 +29,7 @@ class TtsManager @Inject constructor(
         private const val TTS_MODEL_DIR = "sherpa-onnx-tts"
         private const val SAMPLE_RATE = 16000
         private const val SPEAKER_ID = 0
+        private const val DAC_WARMUP_MS = 50
     }
 
     private var tts: OfflineTts? = null
@@ -39,8 +41,13 @@ class TtsManager @Inject constructor(
     private val _events = MutableSharedFlow<TtsEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<TtsEvent> = _events
 
-    // 收集完整回复文本，end 后一次性合成
-    private val textBuffer = StringBuilder()
+    // 分句缓冲
+    private val sentenceBuffer = StringBuilder()
+    private val sentenceQueue = mutableListOf<String>()
+    private var streamFinished = false
+    private var dacWarmedUp = false
+
+    private val sentenceDelimiters = charArrayOf('。', '！', '？', '，', '；', '\n', '.', '!', '?')
 
     fun init() {
         try {
@@ -74,44 +81,73 @@ class TtsManager @Inject constructor(
     }
 
     /**
-     * 流式接收 token，只缓存不合成
+     * 流式接收 token，按标点分句后立即入队合成播报
      */
     fun feedToken(token: String) {
         if (!isReady) return
-        textBuffer.append(token)
+
+        sentenceBuffer.append(token)
+
+        val content = sentenceBuffer.toString()
+        val lastDelimiterIndex = content.indexOfLast { it in sentenceDelimiters }
+
+        if (lastDelimiterIndex >= 0) {
+            val sentence = content.substring(0, lastDelimiterIndex + 1).trim()
+            val remaining = content.substring(lastDelimiterIndex + 1)
+            sentenceBuffer.clear()
+            sentenceBuffer.append(remaining)
+
+            if (sentence.isNotBlank()) {
+                synchronized(sentenceQueue) {
+                    sentenceQueue.add(sentence)
+                }
+                ensureSpeaking()
+            }
+        }
     }
 
     /**
-     * 流结束，把完整文本一次性送 TTS 合成播放
+     * 流结束，播报剩余缓冲内容
      */
     fun finishStream() {
         if (!isReady) return
-        val text = textBuffer.toString().trim()
-        textBuffer.clear()
-        if (text.isBlank()) return
+        val remaining = sentenceBuffer.toString().trim()
+        if (remaining.isNotBlank()) {
+            synchronized(sentenceQueue) {
+                sentenceQueue.add(remaining)
+            }
+        }
+        sentenceBuffer.clear()
+        streamFinished = true
+        ensureSpeaking()
+    }
 
-        speakJob?.cancel()
+    private fun ensureSpeaking() {
+        if (speakJob?.isActive == true) return
         speakJob = scope.launch {
             _events.tryEmit(TtsEvent.SpeakStart)
-            speakText(text)
+            dacWarmedUp = false
+
+            while (isActive) {
+                val sentence = synchronized(sentenceQueue) {
+                    if (sentenceQueue.isNotEmpty()) sentenceQueue.removeAt(0) else null
+                }
+
+                if (sentence != null) {
+                    speakSentence(sentence)
+                } else if (streamFinished) {
+                    break
+                } else {
+                    kotlinx.coroutines.delay(100)
+                }
+            }
+
+            streamFinished = false
             _events.tryEmit(TtsEvent.AllDone)
         }
     }
 
-    /**
-     * 立即播报一段文字（中断当前播放）
-     */
-    fun speakImmediate(text: String) {
-        if (!isReady) return
-        stop()
-        speakJob = scope.launch {
-            _events.tryEmit(TtsEvent.SpeakStart)
-            speakText(text)
-            _events.tryEmit(TtsEvent.AllDone)
-        }
-    }
-
-    private fun speakText(text: String) {
+    private fun speakSentence(text: String) {
         val engine = tts ?: return
         Log.d(TAG, "Speaking: '$text'")
 
@@ -120,12 +156,15 @@ class TtsManager @Inject constructor(
 
         ensureAudioTrack(audio.sampleRate)
 
-        // 在音频前插入 50ms 极低音量噪声，防止 DAC gate 导致淡入
-        val warmupSamples = audio.sampleRate / 20 // 50ms
-        val warmup = ShortArray(warmupSamples) { 1 } // 极低振幅，人耳不可闻
-        audioTrack?.write(warmup, 0, warmup.size)
+        // 首句前插入 DAC 预热信号，防止硬件 gate 导致淡入
+        if (!dacWarmedUp) {
+            val warmupSamples = audio.sampleRate * DAC_WARMUP_MS / 1000
+            val warmup = ShortArray(warmupSamples) { 1 }
+            audioTrack?.write(warmup, 0, warmup.size)
+            dacWarmedUp = true
+        }
 
-        // 转 PCM 16-bit 直接播放
+        // 转 PCM 16-bit
         val pcm = ShortArray(audio.samples.size) {
             (audio.samples[it] * 32767).toInt().coerceIn(-32768, 32767).toShort()
         }
@@ -136,8 +175,18 @@ class TtsManager @Inject constructor(
     fun stop() {
         speakJob?.cancel()
         speakJob = null
-        textBuffer.clear()
-        // 不释放 AudioTrack，保持常驻避免淡入
+        synchronized(sentenceQueue) { sentenceQueue.clear() }
+        sentenceBuffer.clear()
+        streamFinished = false
+        dacWarmedUp = false
+    }
+
+    fun speakImmediate(text: String) {
+        if (!isReady) return
+        stop()
+        synchronized(sentenceQueue) { sentenceQueue.add(text) }
+        streamFinished = true
+        ensureSpeaking()
     }
 
     private fun ensureAudioTrack(sampleRate: Int) {
