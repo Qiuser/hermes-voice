@@ -85,9 +85,12 @@ VOICE_PLATFORM_HINT = (
     "1) Keep replies under 3 sentences and 80 characters. "
     "2) No markdown, code blocks, or list formatting. "
     "3) Use conversational spoken language. "
-    "4) Lead with the key point. For details say '详细信息我发飞书给你'. "
-    "5) For confirmations, one sentence: '好的，开始部署了'. "
-    "6) For long content, summarize first, ask if user wants details."
+    "4) Lead with the key point. "
+    "5) For confirmations, one sentence. "
+    "6) For long content (code, logs, detailed explanations), "
+    "use the send_to_feishu tool to send it to Feishu, "
+    "then tell the user: details sent to Feishu. "
+    "7) ALWAYS use send_to_feishu for content longer than 2 sentences."
 )
 
 
@@ -655,3 +658,118 @@ def register(ctx) -> None:
         allow_update_command=False,
         platform_hint=VOICE_PLATFORM_HINT,
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# send_to_feishu tool — lets the voice agent push detailed content to Feishu
+# ──────────────────────────────────────────────────────────────────────────
+
+SEND_TO_FEISHU_SCHEMA = {
+    "name": "send_to_feishu",
+    "description": (
+        "Send a detailed message to the user's Feishu (飞书) chat. "
+        "Use this when the user is on voice mode and you need to send long content, "
+        "code snippets, links, or formatted text that is too long to speak aloud. "
+        "The user will receive it in their Feishu DM."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "content": {
+                "type": "string",
+                "description": "The message content to send to Feishu. Can include markdown.",
+            },
+        },
+        "required": ["content"],
+    },
+}
+
+
+def _handle_send_to_feishu(args, **kw):
+    """Tool handler: send content to user's Feishu chat."""
+    import asyncio
+    import json
+    import os
+
+    content = args.get("content", "").strip()
+    if not content:
+        return json.dumps({"error": "content is required"})
+
+    chat_id = os.getenv("FEISHU_HOME_CHANNEL", "")
+    if not chat_id:
+        # Try config.yaml
+        try:
+            from hermes_cli.config import cfg_get, load_config
+            cfg = load_config()
+            chat_id = cfg_get(cfg, "FEISHU_HOME_CHANNEL", default="")
+        except Exception:
+            pass
+
+    if not chat_id:
+        return json.dumps({"error": "FEISHU_HOME_CHANNEL not configured"})
+
+    try:
+        from gateway.run import _gateway_runner_ref
+        from gateway.config import Platform
+        runner = _gateway_runner_ref()
+        if runner is None:
+            return json.dumps({"error": "Gateway runner not available"})
+
+        adapter = runner.adapters.get(Platform.FEISHU)
+        if adapter is None:
+            return json.dumps({"error": "Feishu adapter not connected"})
+
+        # Schedule the async send on the gateway event loop
+        from agent.async_utils import safe_schedule_threadsafe
+        import threading
+
+        loop = None
+        for attr in ("_loop", "loop"):
+            loop = getattr(runner, attr, None)
+            if loop is not None:
+                break
+        if loop is None:
+            # Try asyncio running loop
+            try:
+                loop = asyncio.get_event_loop()
+            except Exception:
+                pass
+
+        if loop is None:
+            return json.dumps({"error": "No event loop available"})
+
+        future = safe_schedule_threadsafe(
+            adapter.send(chat_id, f"📋 来自语音对话的详细内容：\n\n{content}"),
+            loop,
+        )
+        if future is not None:
+            result = future.result(timeout=30)
+            if hasattr(result, "success") and result.success:
+                return json.dumps({"result": "Message sent to Feishu successfully."})
+            else:
+                err = getattr(result, "error", "unknown error")
+                return json.dumps({"error": f"Feishu send failed: {err}"})
+        return json.dumps({"error": "Failed to schedule send"})
+    except Exception as e:
+        return json.dumps({"error": f"send_to_feishu failed: {e}"})
+
+
+def _check_send_to_feishu():
+    """Check if send_to_feishu can work."""
+    import os
+    return bool(os.getenv("FEISHU_HOME_CHANNEL") or os.getenv("FEISHU_APP_ID"))
+
+
+# Register the tool via the tools registry (separate from platform registration)
+try:
+    from tools.registry import registry
+    registry.register(
+        name="send_to_feishu",
+        toolset="terminal",
+        schema=SEND_TO_FEISHU_SCHEMA,
+        handler=_handle_send_to_feishu,
+        check_fn=_check_send_to_feishu,
+        emoji="📨",
+    )
+except Exception:
+    pass  # tools.registry may not be importable at plugin load time
