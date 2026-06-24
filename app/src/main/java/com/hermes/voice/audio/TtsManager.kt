@@ -178,13 +178,12 @@ class TtsManager @Inject constructor(
     }
 
     fun stop() {
-        speakJob?.cancel()
-        speakJob = null
+        // 不 cancel speakJob（native generate 不可中断，cancel 会导致 SIGABRT）
+        // 只清空队列和标记结束，让当前句播完后自然退出
         synchronized(sentenceQueue) { sentenceQueue.clear() }
         sentenceBuffer.clear()
-        streamFinished = false
+        streamFinished = true  // 让 ensureSpeaking 循环退出
         dacWarmedUp = false
-        // 不释放 AudioTrack，避免并发写入时 crash
     }
 
     fun speakImmediate(text: String) {
