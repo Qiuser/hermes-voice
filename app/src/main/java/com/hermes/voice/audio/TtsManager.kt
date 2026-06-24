@@ -151,7 +151,12 @@ class TtsManager @Inject constructor(
         val engine = tts ?: return
         Log.d(TAG, "Speaking: '$text'")
 
-        val audio = engine.generate(text = text, sid = SPEAKER_ID, speed = 1.0f)
+        val audio = try {
+            engine.generate(text = text, sid = SPEAKER_ID, speed = 1.0f)
+        } catch (e: Exception) {
+            Log.e(TAG, "TTS generate error: ${e.message}")
+            return
+        }
         if (audio.samples.isEmpty()) return
 
         ensureAudioTrack(audio.sampleRate)
@@ -179,6 +184,7 @@ class TtsManager @Inject constructor(
         sentenceBuffer.clear()
         streamFinished = false
         dacWarmedUp = false
+        // 不释放 AudioTrack，避免并发写入时 crash
     }
 
     fun speakImmediate(text: String) {
