@@ -81,16 +81,17 @@ MAX_MESSAGE_LENGTH = 2000  # Voice replies should be short
 
 # Platform hint — don't mention "voice" to avoid triggering server-side TTS
 VOICE_PLATFORM_HINT = (
-    "You are in brief-reply mode. Rules: "
-    "1) Keep replies under 3 sentences and 80 characters. "
-    "2) No markdown, code blocks, or list formatting. "
-    "3) Use conversational spoken language. "
-    "4) Lead with the key point. "
-    "5) For confirmations, one sentence. "
-    "6) For long content (code, logs, detailed explanations), "
-    "use the send_to_feishu tool to send it to Feishu, "
-    "then tell the user: details sent to Feishu. "
-    "7) ALWAYS use send_to_feishu for content longer than 2 sentences."
+    "You are on a voice platform (TTS output). Keep replies conversational and speakable. "
+    "Rules: "
+    "1) Use plain spoken language, no markdown or formatting. "
+    "2) Keep replies concise, like talking face to face. "
+    "3) When your reply contains content that CANNOT be spoken aloud "
+    "(code snippets, URLs, commands, file paths, tables, config examples), "
+    "send those to Feishu using terminal: hermes send -t feishu \"<unspeakable content>\", "
+    "then verbally say something like: code sent to Feishu, or link sent to Feishu. "
+    "4) Normal conversational replies (explanations, confirmations, opinions) "
+    "should be spoken directly, even if a few sentences long. "
+    "5) Only send to Feishu when content literally cannot be read aloud."
 )
 
 
@@ -473,6 +474,8 @@ class VoiceAdapter(BasePlatformAdapter):
             await self._handle_stt_token_request(client)
 
     async def _process_user_message(self, client: VoiceClient, text: str) -> None:
+        if not text or not text.strip():
+            return
         """Route user message through the gateway message pipeline."""
         source = self.build_source(
             chat_id=client.device_id,
@@ -659,6 +662,16 @@ def register(ctx) -> None:
         platform_hint=VOICE_PLATFORM_HINT,
     )
 
+    # Register send_to_feishu tool
+    ctx.register_tool(
+        name="send_to_feishu",
+        toolset="terminal",
+        schema=SEND_TO_FEISHU_SCHEMA,
+        handler=_handle_send_to_feishu,
+        check_fn=lambda: bool(__import__("os").getenv("FEISHU_HOME_CHANNEL") or __import__("os").getenv("FEISHU_APP_ID")),
+        emoji="📨",
+    )
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # send_to_feishu tool — lets the voice agent push detailed content to Feishu
@@ -724,7 +737,7 @@ def _handle_send_to_feishu(args, **kw):
         import threading
 
         loop = None
-        for attr in ("_loop", "loop"):
+        for attr in ("_gateway_loop", "_loop", "loop"):
             loop = getattr(runner, attr, None)
             if loop is not None:
                 break
@@ -754,22 +767,3 @@ def _handle_send_to_feishu(args, **kw):
         return json.dumps({"error": f"send_to_feishu failed: {e}"})
 
 
-def _check_send_to_feishu():
-    """Check if send_to_feishu can work."""
-    import os
-    return bool(os.getenv("FEISHU_HOME_CHANNEL") or os.getenv("FEISHU_APP_ID"))
-
-
-# Register the tool via the tools registry (separate from platform registration)
-try:
-    from tools.registry import registry
-    registry.register(
-        name="send_to_feishu",
-        toolset="terminal",
-        schema=SEND_TO_FEISHU_SCHEMA,
-        handler=_handle_send_to_feishu,
-        check_fn=_check_send_to_feishu,
-        emoji="📨",
-    )
-except Exception:
-    pass  # tools.registry may not be importable at plugin load time
