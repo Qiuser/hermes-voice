@@ -46,6 +46,7 @@ class TtsManager @Inject constructor(
     private val sentenceQueue = mutableListOf<String>()
     private var streamFinished = false
     private var dacWarmedUp = false
+    @Volatile private var interrupted = false
 
     private val sentenceDelimiters = charArrayOf('。', '！', '？', '，', '；', '\n', '.', '!', '?')
 
@@ -124,11 +125,12 @@ class TtsManager @Inject constructor(
 
     private fun ensureSpeaking() {
         if (speakJob?.isActive == true) return
+        interrupted = false
         speakJob = scope.launch {
             _events.tryEmit(TtsEvent.SpeakStart)
             dacWarmedUp = false
 
-            while (isActive) {
+            while (isActive && !interrupted) {
                 val sentence = synchronized(sentenceQueue) {
                     if (sentenceQueue.isNotEmpty()) sentenceQueue.removeAt(0) else null
                 }
@@ -159,6 +161,9 @@ class TtsManager @Inject constructor(
         }
         if (audio.samples.isEmpty()) return
 
+        // 生成完后检查是否被打断
+        if (interrupted) return
+
         ensureAudioTrack(audio.sampleRate)
 
         // 首句前插入 DAC 预热信号，防止硬件 gate 导致淡入
@@ -178,12 +183,20 @@ class TtsManager @Inject constructor(
     }
 
     fun stop() {
-        // 不 cancel speakJob（native generate 不可中断，cancel 会导致 SIGABRT）
-        // 只清空队列和标记结束，让当前句播完后自然退出
+        // 标记打断，当前句生成完后不写入 AudioTrack
+        interrupted = true
         synchronized(sentenceQueue) { sentenceQueue.clear() }
         sentenceBuffer.clear()
-        streamFinished = true  // 让 ensureSpeaking 循环退出
+        streamFinished = true
         dacWarmedUp = false
+        // 立刻静音：flush AudioTrack 缓冲区
+        try {
+            audioTrack?.pause()
+            audioTrack?.flush()
+            audioTrack?.play()
+        } catch (e: Exception) {
+            Log.w(TAG, "AudioTrack flush error: ${e.message}")
+        }
     }
 
     fun speakImmediate(text: String) {
