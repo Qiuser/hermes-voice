@@ -48,6 +48,7 @@ class VoiceSessionManager @Inject constructor(
     private var sttJob: Job? = null
     private var ttsJob: Job? = null
     private var wsJob: Job? = null
+    private var tokenRefreshJob: Job? = null
 
     fun initialize() {
         ttsManager.init()
@@ -138,7 +139,8 @@ class VoiceSessionManager @Inject constructor(
                         // 连接成功后请求 STT 凭据
                         wsClient.requestSttToken()
                         // 启动定时刷新（每 3 分钟刷新一次 token）
-                        scope.launch {
+                        tokenRefreshJob?.cancel()
+                        tokenRefreshJob = scope.launch {
                             while (true) {
                                 kotlinx.coroutines.delay(3 * 60 * 1000)
                                 wsClient.requestSttToken()
