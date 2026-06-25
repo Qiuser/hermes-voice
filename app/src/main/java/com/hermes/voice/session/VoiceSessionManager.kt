@@ -60,12 +60,19 @@ class VoiceSessionManager @Inject constructor(
     fun startSession() {
         if (_state.value != SessionState.IDLE) return
         audioFocusManager.requestFocus()
-        // 每次开始对话前刷新 STT token（如果快过期）
+        // 每次开始对话前检查 STT token，过期则刷新
         if (!sttManager.hasSttToken()) {
             wsClient.requestSttToken()
+            // 等一小段时间让 token 到达（异步）
+            scope.launch {
+                kotlinx.coroutines.delay(500)
+                transitionTo(SessionState.LISTENING)
+                sttManager.startListening()
+            }
+        } else {
+            transitionTo(SessionState.LISTENING)
+            sttManager.startListening()
         }
-        transitionTo(SessionState.LISTENING)
-        sttManager.startListening()
     }
 
     fun stopSession() {
