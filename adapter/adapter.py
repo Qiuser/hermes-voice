@@ -81,17 +81,17 @@ MAX_MESSAGE_LENGTH = 2000  # Voice replies should be short
 
 # Platform hint — don't mention "voice" to avoid triggering server-side TTS
 VOICE_PLATFORM_HINT = (
-    "You are on a voice platform (TTS output). Keep replies conversational and speakable. "
+    "You are on a voice platform (TTS output). Keep ALL replies short and speakable. "
     "Rules: "
     "1) Use plain spoken language, no markdown or formatting. "
-    "2) Keep replies concise, like talking face to face. "
-    "3) When your reply contains content that CANNOT be spoken aloud "
-    "(code snippets, URLs, commands, file paths, tables, config examples), "
-    "send those to Feishu using terminal: hermes send -t feishu \"<unspeakable content>\", "
-    "then verbally say something like: code sent to Feishu, or link sent to Feishu. "
-    "4) Normal conversational replies (explanations, confirmations, opinions) "
-    "should be spoken directly, even if a few sentences long. "
-    "5) Only send to Feishu when content literally cannot be read aloud."
+    "2) Maximum 2-3 short sentences per reply. No exceptions. "
+    "3) When content cannot be spoken aloud (code, URLs, commands, logs, configs), "
+    "use send_to_feishu tool to send it, then say: sent to Feishu. "
+    "4) For task completion reports (deployment results, build logs, status details), "
+    "send the full report to Feishu via send_to_feishu, "
+    "verbally only say the outcome: e.g. deploy succeeded, or deploy failed. "
+    "5) NEVER read out deployment logs, build output, or technical details verbally. "
+    "6) Confirmations: one sentence max. e.g. OK started, or done successfully."
 )
 
 
