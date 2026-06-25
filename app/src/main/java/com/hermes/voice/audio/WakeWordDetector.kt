@@ -81,8 +81,8 @@ class WakeWordDetector @Inject constructor(
                 debug = false,
             ),
             keywordsFile = "$KWS_DIR/keywords.txt",
-            keywordsThreshold = 0.1f,
-            keywordsScore = 1.5f,
+            keywordsThreshold = 0.05f,
+            keywordsScore = 2.0f,
         )
         keywordSpotter = KeywordSpotter(
             assetManager = context.assets,
