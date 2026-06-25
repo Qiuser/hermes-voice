@@ -144,12 +144,12 @@ class VoiceService : Service() {
         val currentState = voiceSessionManager.state.value
         if (currentState == SessionState.IDLE) {
             Log.d(TAG, "Starting voice session")
-            // 先停唤醒检测，释放麦克风
+            // 先停唤醒检测释放麦克风，播提示音，再开始录音
             wakeWordDetector.stop()
-            voiceSessionManager.startSession()
+            playStartTone()
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                playStartTone()
-            }, 200)
+                voiceSessionManager.startSession()
+            }, 300)
         } else {
             Log.d(TAG, "Stopping voice session")
             voiceSessionManager.stopSession()
