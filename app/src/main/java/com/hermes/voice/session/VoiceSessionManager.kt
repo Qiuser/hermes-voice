@@ -63,21 +63,15 @@ class VoiceSessionManager @Inject constructor(
         audioFocusManager.requestFocus()
         transitionTo(SessionState.LISTENING)
 
-        if (sttManager.hasSttToken()) {
-            // 有可用 token，直接开始
-            sttManager.startListening()
-        } else {
-            // 请求新 token，等拿到后开始
+        // 如果没有可用 token，先请求再等
+        if (!sttManager.hasSttToken()) {
             wsClient.requestSttToken()
-            scope.launch {
-                // 等待 token 到达（最多 2 秒）
-                var waited = 0
-                while (!sttManager.hasSttToken() && waited < 2000) {
-                    kotlinx.coroutines.delay(100)
-                    waited += 100
-                }
-                sttManager.startListening()
-            }
+        }
+
+        // 延迟 500ms 再开始录音（给 token 请求留时间，也给"嗯"播完留时间）
+        scope.launch {
+            kotlinx.coroutines.delay(500)
+            sttManager.startListening()
         }
     }
 
