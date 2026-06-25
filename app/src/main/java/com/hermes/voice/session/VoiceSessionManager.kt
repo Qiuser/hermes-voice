@@ -62,7 +62,23 @@ class VoiceSessionManager @Inject constructor(
         if (_state.value != SessionState.IDLE) return
         audioFocusManager.requestFocus()
         transitionTo(SessionState.LISTENING)
-        sttManager.startListening()
+
+        if (sttManager.hasSttToken()) {
+            // 有可用 token，直接开始
+            sttManager.startListening()
+        } else {
+            // 请求新 token，等拿到后开始
+            wsClient.requestSttToken()
+            scope.launch {
+                // 等待 token 到达（最多 2 秒）
+                var waited = 0
+                while (!sttManager.hasSttToken() && waited < 2000) {
+                    kotlinx.coroutines.delay(100)
+                    waited += 100
+                }
+                sttManager.startListening()
+            }
+        }
     }
 
     fun stopSession() {
@@ -83,6 +99,8 @@ class VoiceSessionManager @Inject constructor(
                         wsClient.sendMessage(event.text)
                         // 提示音：消息已发送
                         ttsManager.playBeep(500, 100)
+                        // 预请求下一个 STT token（讯飞签名 URL 是一次性的）
+                        wsClient.requestSttToken()
                     }
                     is SttEvent.PartialResult -> {
                         // partial result 不发送，只通知 UI 临时展示
@@ -136,16 +154,8 @@ class VoiceSessionManager @Inject constructor(
             wsClient.events.collect { event ->
                 when (event) {
                     is WsEvent.Connected -> {
-                        // 连接成功后请求 STT 凭据
+                        // 连接成功后请求 STT 凭据（预备第一次使用）
                         wsClient.requestSttToken()
-                        // 启动定时刷新（每 3 分钟刷新一次 token）
-                        tokenRefreshJob?.cancel()
-                        tokenRefreshJob = scope.launch {
-                            while (true) {
-                                kotlinx.coroutines.delay(3 * 60 * 1000)
-                                wsClient.requestSttToken()
-                            }
-                        }
                     }
                     is WsEvent.SttToken -> {
                         // 收到讯飞凭据，设置给 STT 管理器

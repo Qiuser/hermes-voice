@@ -48,6 +48,7 @@ class SpeechRecognizerManager @Inject constructor(
     private var xfyunUrl: String? = null
     private var xfyunAppId: String? = null
     private var tokenSetTime: Long = 0
+    private var tokenUsed: Boolean = false
 
     /**
      * 设置讯飞在线 STT 凭据
@@ -56,15 +57,16 @@ class SpeechRecognizerManager @Inject constructor(
         xfyunUrl = url
         xfyunAppId = appId
         tokenSetTime = System.currentTimeMillis()
+        tokenUsed = false
         Log.d(TAG, "Xfyun STT token set, appId=$appId")
     }
 
     fun hasSttToken(): Boolean {
         if (xfyunUrl.isNullOrBlank()) return false
-        // 检查是否过期（4分钟刷新，留 1 分钟余量）
+        if (tokenUsed) return false
         val elapsed = System.currentTimeMillis() - tokenSetTime
         if (elapsed > 4 * 60 * 1000) {
-            Log.d(TAG, "STT token expired, falling back to offline")
+            Log.d(TAG, "STT token expired")
             return false
         }
         return true
@@ -141,6 +143,7 @@ class SpeechRecognizerManager @Inject constructor(
     private fun startOnlineRecognition() {
         val url = xfyunUrl ?: return
         val appId = xfyunAppId ?: return
+        tokenUsed = true // 标记已使用，下次需要新 token
 
         val bufferSize = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
