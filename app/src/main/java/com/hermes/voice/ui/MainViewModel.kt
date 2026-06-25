@@ -16,6 +16,9 @@ import com.hermes.voice.session.VoiceSessionManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import javax.inject.Inject
 
 @HiltViewModel
@@ -56,12 +59,20 @@ class MainViewModel @Inject constructor(
     private fun loadHistory() {
         viewModelScope.launch {
             val messages = messageDao.getAll()
+            var lastDate = ""
             for (msg in messages) {
+                val dateStr = formatDate(msg.timestamp)
+                val timeStr = formatTime(msg.timestamp)
+                // 日期变化时显示日期分隔线
+                if (dateStr != lastDate) {
+                    chatLogBuilder.append("── $dateStr ──\n\n")
+                    lastDate = dateStr
+                }
                 when (msg.role) {
-                    "user" -> chatLogBuilder.append("你: ${msg.content}\n\n")
-                    "assistant" -> chatLogBuilder.append("Hermes: ${msg.content}\n\n")
-                    "system" -> chatLogBuilder.append("${msg.content}\n\n")
-                    "error" -> chatLogBuilder.append("错误: ${msg.content}\n\n")
+                    "user" -> chatLogBuilder.append("[$timeStr] 你: ${msg.content}\n\n")
+                    "assistant" -> chatLogBuilder.append("[$timeStr] Hermes: ${msg.content}\n\n")
+                    "system" -> chatLogBuilder.append("[$timeStr] ${msg.content}\n\n")
+                    "error" -> chatLogBuilder.append("[$timeStr] 错误: ${msg.content}\n\n")
                 }
             }
             if (chatLogBuilder.isNotEmpty()) {
@@ -74,6 +85,19 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             messageDao.insert(MessageEntity(role = role, content = content))
         }
+    }
+
+    private fun formatTime(timestamp: Long): String {
+        return SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(timestamp))
+    }
+
+    private fun formatDate(timestamp: Long): String {
+        return SimpleDateFormat("MM-dd", Locale.getDefault()).format(Date(timestamp))
+    }
+
+    private fun appendWithTime(prefix: String, content: String) {
+        val time = formatTime(System.currentTimeMillis())
+        chatLogBuilder.append("[$time] $prefix$content\n\n")
     }
 
     private fun initVoiceSession() {
@@ -90,7 +114,7 @@ class MainViewModel @Inject constructor(
             launch {
                 voiceSessionManager.transcript.collect { text ->
                     // 最终识别结果，追加到 chatLog
-                    chatLogBuilder.append("你: $text\n\n")
+                    appendWithTime("你: ", text)
                     _chatLog.postValue("${chatLogBuilder}Hermes: ...")
                     saveMessage("user", text)
                 }
@@ -103,7 +127,7 @@ class MainViewModel @Inject constructor(
             }
             launch {
                 voiceSessionManager.error.collect { msg ->
-                    chatLogBuilder.append("错误: $msg\n\n")
+                    appendWithTime("错误: ", msg)
                     _chatLog.postValue(chatLogBuilder.toString())
                 }
             }
@@ -139,7 +163,7 @@ class MainViewModel @Inject constructor(
                     is WsEvent.End -> {
                         if (currentResponse.isNotEmpty()) {
                             val response = currentResponse.toString()
-                            chatLogBuilder.append("Hermes: $response\n\n")
+                            appendWithTime("Hermes: ", response)
                             currentResponse.clear()
                             _chatLog.postValue(chatLogBuilder.toString())
                             saveMessage("assistant", response)
@@ -151,12 +175,12 @@ class MainViewModel @Inject constructor(
                         }
                     }
                     is WsEvent.Busy -> {
-                        chatLogBuilder.append("系统: ${event.message}\n\n")
+                        appendWithTime("系统: ", event.message)
                         _chatLog.postValue(chatLogBuilder.toString())
                     }
                     is WsEvent.System -> {
                         // 系统消息不播报，静默显示
-                        chatLogBuilder.append("${event.content}\n\n")
+                        appendWithTime("", event.content)
                         _chatLog.postValue(chatLogBuilder.toString())
                     }
                     is WsEvent.ToolStart -> {
@@ -164,7 +188,7 @@ class MainViewModel @Inject constructor(
                     }
                     is WsEvent.Error -> {
                         if (waitingForTextResponse || inVoiceSession) {
-                            chatLogBuilder.append("错误: ${event.message}\n\n")
+                            appendWithTime("错误: ", event.message)
                             currentResponse.clear()
                             waitingForTextResponse = false
                             _chatLog.postValue(chatLogBuilder.toString())
@@ -196,12 +220,12 @@ class MainViewModel @Inject constructor(
     fun sendMessage(text: String) {
         if (text.isBlank()) return
         if (!wsClient.isConnected) {
-            chatLogBuilder.append("错误: 未连接到服务器\n\n")
+            appendWithTime("错误: ", "未连接到服务器")
             _chatLog.value = chatLogBuilder.toString()
             return
         }
 
-        chatLogBuilder.append("你: $text\n\n")
+        appendWithTime("你: ", text)
         _chatLog.value = "${chatLogBuilder}Hermes: ..."
         currentResponse.clear()
         waitingForTextResponse = true
