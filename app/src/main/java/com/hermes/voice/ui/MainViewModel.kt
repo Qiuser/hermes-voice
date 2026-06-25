@@ -4,6 +4,8 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.hermes.voice.data.MessageDao
+import com.hermes.voice.data.MessageEntity
 import com.hermes.voice.network.ApiConfig
 import com.hermes.voice.network.ConnectionManager
 import com.hermes.voice.network.ConnectionState
@@ -21,7 +23,8 @@ class MainViewModel @Inject constructor(
     private val apiConfig: ApiConfig,
     private val wsClient: VoiceWebSocketClient,
     private val connectionManager: ConnectionManager,
-    private val voiceSessionManager: VoiceSessionManager
+    private val voiceSessionManager: VoiceSessionManager,
+    private val messageDao: MessageDao
 ) : ViewModel() {
 
     private val _sessionState = MutableLiveData(SessionState.IDLE)
@@ -44,9 +47,33 @@ class MainViewModel @Inject constructor(
 
     init {
         checkConfig()
+        loadHistory()
         initVoiceSession()
         observeConnection()
         observeWsEvents()
+    }
+
+    private fun loadHistory() {
+        viewModelScope.launch {
+            val messages = messageDao.getAll()
+            for (msg in messages) {
+                when (msg.role) {
+                    "user" -> chatLogBuilder.append("你: ${msg.content}\n\n")
+                    "assistant" -> chatLogBuilder.append("Hermes: ${msg.content}\n\n")
+                    "system" -> chatLogBuilder.append("${msg.content}\n\n")
+                    "error" -> chatLogBuilder.append("错误: ${msg.content}\n\n")
+                }
+            }
+            if (chatLogBuilder.isNotEmpty()) {
+                _chatLog.postValue(chatLogBuilder.toString())
+            }
+        }
+    }
+
+    private fun saveMessage(role: String, content: String) {
+        viewModelScope.launch {
+            messageDao.insert(MessageEntity(role = role, content = content))
+        }
     }
 
     private fun initVoiceSession() {
@@ -65,6 +92,7 @@ class MainViewModel @Inject constructor(
                     // 最终识别结果，追加到 chatLog
                     chatLogBuilder.append("你: $text\n\n")
                     _chatLog.postValue("${chatLogBuilder}Hermes: ...")
+                    saveMessage("user", text)
                 }
             }
             launch {
@@ -110,9 +138,11 @@ class MainViewModel @Inject constructor(
                     }
                     is WsEvent.End -> {
                         if (currentResponse.isNotEmpty()) {
-                            chatLogBuilder.append("Hermes: $currentResponse\n\n")
+                            val response = currentResponse.toString()
+                            chatLogBuilder.append("Hermes: $response\n\n")
                             currentResponse.clear()
                             _chatLog.postValue(chatLogBuilder.toString())
+                            saveMessage("assistant", response)
                         }
                         voiceSessionManager.finishTts()
                         if (waitingForTextResponse) {
@@ -175,6 +205,7 @@ class MainViewModel @Inject constructor(
         _chatLog.value = "${chatLogBuilder}Hermes: ..."
         currentResponse.clear()
         waitingForTextResponse = true
+        saveMessage("user", text)
         _sessionState.value = SessionState.THINKING
 
         wsClient.sendMessage(text)
@@ -185,6 +216,7 @@ class MainViewModel @Inject constructor(
         chatLogBuilder.clear()
         currentResponse.clear()
         _chatLog.value = ""
+        viewModelScope.launch { messageDao.deleteAll() }
     }
 
     override fun onCleared() {

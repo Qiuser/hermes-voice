@@ -5,6 +5,8 @@ import com.hermes.voice.audio.AudioFocusManager
 import com.hermes.voice.audio.SpeechRecognizerManager
 import com.hermes.voice.audio.TtsManager
 import com.hermes.voice.audio.WakeWordDetector
+import com.hermes.voice.data.AppDatabase
+import com.hermes.voice.data.MessageDao
 import com.hermes.voice.network.ApiConfig
 import com.hermes.voice.network.ConnectionManager
 import com.hermes.voice.network.VoiceWebSocketClient
@@ -24,6 +26,18 @@ object AppModule {
     @Singleton
     fun provideApiConfig(@ApplicationContext context: Context): ApiConfig {
         return ApiConfig(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideAppDatabase(@ApplicationContext context: Context): AppDatabase {
+        return AppDatabase.getInstance(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideMessageDao(database: AppDatabase): MessageDao {
+        return database.messageDao()
     }
 
     @Provides
