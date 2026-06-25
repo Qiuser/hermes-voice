@@ -751,10 +751,30 @@ def _handle_send_to_feishu(args, **kw):
         if loop is None:
             return json.dumps({"error": "No event loop available"})
 
-        future = safe_schedule_threadsafe(
-            adapter.send(chat_id, f"📋 来自语音对话的详细内容：\n\n{content}"),
-            loop,
-        )
+        # Build a Feishu interactive card with markdown for proper rendering
+        import json as _json
+        _card = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"content": "📋 来自语音对话", "tag": "plain_text"},
+                "template": "blue",
+            },
+            "elements": [
+                {"tag": "markdown", "content": content},
+            ],
+        }
+        _card_payload = _json.dumps(_card, ensure_ascii=False)
+
+        async def _send_card():
+            return await adapter._feishu_send_with_retry(
+                chat_id=chat_id,
+                msg_type="interactive",
+                payload=_card_payload,
+                reply_to=None,
+                metadata=None,
+            )
+
+        future = safe_schedule_threadsafe(_send_card(), loop)
         if future is not None:
             result = future.result(timeout=30)
             if hasattr(result, "success") and result.success:

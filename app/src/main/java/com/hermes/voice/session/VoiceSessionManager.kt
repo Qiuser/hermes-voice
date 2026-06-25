@@ -60,6 +60,10 @@ class VoiceSessionManager @Inject constructor(
     fun startSession() {
         if (_state.value != SessionState.IDLE) return
         audioFocusManager.requestFocus()
+        // 每次开始对话前刷新 STT token（如果快过期）
+        if (!sttManager.hasSttToken()) {
+            wsClient.requestSttToken()
+        }
         transitionTo(SessionState.LISTENING)
         sttManager.startListening()
     }

@@ -47,6 +47,28 @@ class SpeechRecognizerManager @Inject constructor(
     // 讯飞在线 STT
     private var xfyunUrl: String? = null
     private var xfyunAppId: String? = null
+    private var tokenSetTime: Long = 0
+
+    /**
+     * 设置讯飞在线 STT 凭据
+     */
+    fun setSttToken(url: String, appId: String) {
+        xfyunUrl = url
+        xfyunAppId = appId
+        tokenSetTime = System.currentTimeMillis()
+        Log.d(TAG, "Xfyun STT token set, appId=$appId")
+    }
+
+    fun hasSttToken(): Boolean {
+        if (xfyunUrl.isNullOrBlank()) return false
+        // 检查是否过期（4分钟刷新，留 1 分钟余量）
+        val elapsed = System.currentTimeMillis() - tokenSetTime
+        if (elapsed > 4 * 60 * 1000) {
+            Log.d(TAG, "STT token expired, falling back to offline")
+            return false
+        }
+        return true
+    }
 
     fun initialize() {
         if (isInitialized) return
@@ -60,17 +82,6 @@ class SpeechRecognizerManager @Inject constructor(
             _events.tryEmit(SttEvent.Error(-1, "语音引擎初始化失败: ${e.message}"))
         }
     }
-
-    /**
-     * 设置讯飞在线 STT 凭据
-     */
-    fun setSttToken(url: String, appId: String) {
-        xfyunUrl = url
-        xfyunAppId = appId
-        Log.d(TAG, "Xfyun STT token set, appId=$appId")
-    }
-
-    fun hasSttToken(): Boolean = !xfyunUrl.isNullOrBlank()
 
     private fun initRecognizer() {
         val config = OfflineRecognizerConfig(
