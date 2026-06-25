@@ -60,19 +60,8 @@ class VoiceSessionManager @Inject constructor(
     fun startSession() {
         if (_state.value != SessionState.IDLE) return
         audioFocusManager.requestFocus()
-        // 每次开始对话前检查 STT token，过期则刷新
-        if (!sttManager.hasSttToken()) {
-            wsClient.requestSttToken()
-            // 等一小段时间让 token 到达（异步）
-            scope.launch {
-                kotlinx.coroutines.delay(500)
-                transitionTo(SessionState.LISTENING)
-                sttManager.startListening()
-            }
-        } else {
-            transitionTo(SessionState.LISTENING)
-            sttManager.startListening()
-        }
+        transitionTo(SessionState.LISTENING)
+        sttManager.startListening()
     }
 
     fun stopSession() {
@@ -148,6 +137,13 @@ class VoiceSessionManager @Inject constructor(
                     is WsEvent.Connected -> {
                         // 连接成功后请求 STT 凭据
                         wsClient.requestSttToken()
+                        // 启动定时刷新（每 3 分钟刷新一次 token）
+                        scope.launch {
+                            while (true) {
+                                kotlinx.coroutines.delay(3 * 60 * 1000)
+                                wsClient.requestSttToken()
+                            }
+                        }
                     }
                     is WsEvent.SttToken -> {
                         // 收到讯飞凭据，设置给 STT 管理器
