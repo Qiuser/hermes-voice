@@ -26,3 +26,5 @@ __pycache__/
 .venv/
 *.egg-info/
 hermes-voice-spec.local.md
+.narrafork/
+.worktrees/
