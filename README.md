@@ -1,271 +1,187 @@
 # Hermes Voice
 
-English | [简体中文](README_zh.md)
+简体中文 | [English](README_en.md)
 
-Voice platform adapter + Android client for [Hermes Agent](https://github.com/NousResearch/hermes-agent) — hands-free voice interaction via Bluetooth headset.
+面向 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 的语音平台适配器 + Android 客户端 —— 让你戴着蓝牙耳机免手动交互。
 
-## What is this?
+## 这是什么？
 
-Hermes Voice lets you talk to your Hermes Agent by voice — press your Bluetooth headset button, speak, and hear the reply. It's designed for driving, walking, or any situation where you can't type.
+Hermes Voice 让你可以直接用语音跟你的 Hermes Agent 对话——按一下蓝牙耳机按键、说话、听回复。适合开车、走路，或任何不方便打字的场景。
 
-Unlike simple voice wrappers that just proxy to an LLM API, Hermes Voice connects as a **first-class platform adapter** (like Telegram or Discord), giving you the full Hermes experience:
+跟那些只是简单转发到 LLM API 的语音壁纸不同，Hermes Voice 以**平台适配器**的身份接入（跟 Telegram、Discord 适配器同级），因此能拿到完整的 Hermes 体验：
 
-- ✅ All tools (terminal, file, web_search, delegate_task...)
-- ✅ Persistent memory (Hindsight)
+- ✅ 全部工具（terminal、file、web_search、delegate_task……）
+- ✅ 持久记忆（Hindsight）
 - ✅ Skills
-- ✅ Session management + context compression
-- ✅ Command approval (voice confirm/deny)
-- ✅ Background task notifications
-- ✅ Automatic forwarding of unspeakable content (code/URLs) to Feishu
+- ✅ 会话管理 + 上下文压缩
+- ✅ 指令确认（语音确认/拒绝）
+- ✅ 后台任务完成通知
+- ✅ 不可朗读内容（代码/链接）自动转发到飞书
 
-## Architecture
+## 架构
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    Hermes Gateway                         │
 │                                                          │
 │  ┌────────────┐  ┌────────────┐  ┌──────────────────┐  │
-│  │  Feishu    │  │  Telegram  │  │  Voice Adapter   │  │
+│  │  飞书       │  │  Telegram  │  │  语音适配器       │  │
 │  │  Adapter   │  │  Adapter   │  │  (plugin, 8650)  │  │
 │  └─────┬──────┘  └─────┬──────┘  └────────┬─────────┘  │
 │        └───────────────┼───────────────────┘             │
 │                        ▼                                 │
-│         Agent (tools / skills / memory / approval)       │
+│         Agent（工具 / skills / 记忆 / 审批）              │
 └─────────────────────────────────────────────────────────┘
                          ▲ WebSocket
                          │
 ┌────────────────────────┼────────────────────────────────┐
-│              Android App (Kotlin)                         │
-│  Bluetooth trigger → STT (Xunfei) → Agent → TTS reply   │
+│              Android App（Kotlin）                         │
+│  蓝牙触发 → STT（讯飞）→ Agent → TTS 播报                 │
 └─────────────────────────────────────────────────────────┘
 ```
 
-## Components
+## 组成部分
 
-### Server: Voice Platform Adapter (`adapter/`)
+### Server：语音平台适配器（`adapter/`）
 
-A Hermes platform plugin — zero modification to Hermes source code. Drop it into `~/.hermes/hermes-agent/plugins/platforms/voice/` and restart the gateway.
+一个 Hermes 平台插件——不需要修改 Hermes 任何源码。把它放到 `~/.hermes/hermes-agent/plugins/platforms/voice/` 后重启 gateway 即可。
 
-Features:
-- WebSocket server for app connections
-- Token authentication + device pairing
-- Real-time streaming replies (send_draft)
-- Xunfei STT credential proxy (app never sees API keys)
-- Automatic forwarding of code/URLs to Feishu as card messages
-- Brief-reply mode platform hint
-- No server-side TTS (app handles locally)
+功能：
+- 供 App 连接的 WebSocket 服务
+- Token 鉴权 + 设备配对
+- 实时流式回复（send_draft）
+- 讯飞 STT 凭证代理（App 端不会接触到 API key）
+- 代码/链接内容自动转发为飞书卡片消息
+- 简洁回复模式的平台提示
+- 服务端不做 TTS（由 App 本地处理）
 
-### Client: Android App (`app/`)
+### Client：Android App（`app/`）
 
-Native Kotlin Android app for voice interaction.
+原生 Kotlin Android 应用，负责语音交互。
 
-Features:
-- Bluetooth headset button trigger
-- Xunfei Chinese ASR (大模型版, excellent for tech terms like docker/nginx/jenkins)
-- Android native TTS with streaming playback
-- Foreground Service for background operation
-- Wake word detection (optional, Sherpa-ONNX)
-- Conversation history (Room)
-- Auto-reconnect with exponential backoff
+功能：
+- 蓝牙耳机按键触发
+- 讯飞中文大模型 ASR（对 docker/nginx/jenkins 这类技术词汇识别效果很好）
+- Android 原生 TTS，支持流式播放
+- 前台服务，支持后台运行
+- 唤醒词检测（可选，基于 Sherpa-ONNX）
+- 对话历史记录（Room）
+- 断线自动重连（指数退避）
 
-## Quick Start
+## 快速开始
 
-### Server Setup
+### Server 端
 
-1. Copy the adapter to your Hermes plugins:
+1. 把适配器复制到 Hermes 插件目录：
 ```bash
 cp -r adapter/ ~/.hermes/hermes-agent/plugins/platforms/voice/
 ```
 
-2. Add to your `~/.hermes/.env`:
+2. 在 `~/.hermes/.env` 中添加：
 ```bash
 VOICE_TOKEN=$(openssl rand -hex 32)
-# Optional: Xunfei STT credentials (for server-side auth proxy)
+# 可选：讯飞 STT 凭证（用于服务端鉴权代理）
 XFYUN_APP_ID=your_app_id
 XFYUN_API_KEY=your_api_key
 XFYUN_API_SECRET=your_api_secret
 ```
 
-3. Restart gateway:
+3. 重启 gateway：
 ```bash
 systemctl --user restart hermes-gateway.service
 ```
 
-4. Verify:
+4. 验证：
 ```bash
 curl http://localhost:8650/health
 # {"status": "healthy", "platform": "voice", "connected_devices": 0}
 ```
 
-### Client Setup
+### Client 端
 
-1. **Download model files** (required, ~350MB total):
-
-```bash
-cd app/src/main/assets
-
-# 1. Offline STT - SenseVoice (fallback when Xunfei is unavailable)
-mkdir -p sherpa-onnx && cd sherpa-onnx
-wget https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2
-tar xjf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2 --strip-components=1 model.int8.onnx tokens.txt
-rm sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2
-wget -O silero_vad.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
-cd ..
-
-# 2. Wake Word Detection - KWS (keyword: "小马")
-mkdir -p sherpa-onnx-kws && cd sherpa-onnx-kws
-wget https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2
-tar xjf sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2 --strip-components=1
-cp encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx encoder.onnx
-cp decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx decoder.onnx
-cp joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx joiner.onnx
-rm -f *.tar.bz2 *.wav *epoch* test_wavs -rf
-cd ..
-# Note: keywords.txt is already in the repo
-
-# 3. Offline TTS - Matcha Chinese+English
-mkdir -p sherpa-onnx-tts && cd sherpa-onnx-tts
-wget https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/matcha-icefall-zh-en.tar.bz2
-tar xjf matcha-icefall-zh-en.tar.bz2 --strip-components=1
-rm matcha-icefall-zh-en.tar.bz2
-wget -O vocos.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos-16khz-univ.onnx
-cd ..
-```
-
-2. **Download native libraries** (required):
+1. **下载模型文件和 Native 库**（一键脚本）：
 
 ```bash
-cd app/src/main/jniLibs
-wget https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.3/sherpa-onnx-v1.13.3-android.tar.bz2
-tar xjf sherpa-onnx-v1.13.3-android.tar.bz2
-# Keep only arm64-v8a (or whichever arch you need)
-mv jniLibs/arm64-v8a .
-rm -rf jniLibs sherpa-onnx-v1.13.3-android.tar.bz2
-cd ..
+# 最小部署（~175MB，在线 STT + 本地 TTS + 唤醒词）
+./download_models.sh
+
+# 完整部署（~350MB，额外包含离线 STT 降级方案）
+./download_models.sh --full
 ```
 
-3. Build the APK:
+> 脚本会自动下载所有依赖并放置到正确目录，已存在的文件会跳过。
+
+2. 编译 APK：
 ```bash
 cd app
 ./gradlew assembleDebug
 ```
 
-4. Install on your phone and configure:
-   - Hermes address: `ws://your-hermes-host:8650/ws`
-   - Voice Token: (the token you generated above)
+4. 安装到手机上并配置：
+   - Hermes 地址：`ws://your-hermes-host:8650/ws`
+   - Voice Token：（上面生成的 token）
 
-5. First connection will trigger device pairing:
+5. 首次连接会触发设备配对：
 ```bash
 hermes pairing approve voice <CODE>
 ```
 
-## WebSocket Protocol
+## WebSocket 协议
 
-See [hermes-voice-spec.md](hermes-voice-spec.md) for the complete protocol specification including:
-- Authentication flow
-- Message format (delta/end streaming)
-- STT token request
-- Approval interaction
-- Task completion notifications
+完整协议规范见 [hermes-voice-spec.md](hermes-voice-spec.md)，包括：
+- 鉴权流程
+- 消息格式（delta/end 流式）
+- STT token 请求
+- 审批交互
+- 任务完成通知
 
-## Configuration
+## 配置
 
-### Server (`.env`)
+### Server（`.env`）
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `VOICE_TOKEN` | Yes | Authentication token for app connections |
-| `VOICE_WS_PORT` | No | WebSocket port (default: 8650) |
-| `VOICE_ALLOWED_DEVICES` | No | Device allowlist, `*` for all |
-| `XFYUN_APP_ID` | No | Xunfei App ID (for STT proxy) |
-| `XFYUN_API_KEY` | No | Xunfei API Key |
-| `XFYUN_API_SECRET` | No | Xunfei API Secret |
+| 变量 | 是否必需 | 说明 |
+|----------|----------|------|
+| `VOICE_TOKEN` | 是 | App 连接鉴权 token |
+| `VOICE_WS_PORT` | 否 | WebSocket 端口（默认 8650） |
+| `VOICE_ALLOWED_DEVICES` | 否 | 设备白名单，`*` 表示允许全部 |
+| `XFYUN_APP_ID` | 否 | 讯飞 App ID（用于 STT 代理） |
+| `XFYUN_API_KEY` | 否 | 讯飞 API Key |
+| `XFYUN_API_SECRET` | 否 | 讯飞 API Secret |
 
-### Client (App Settings)
+### Client（App 设置）
 
-| Setting | Description |
-|---------|-------------|
-| Hermes Address | WS/WSS URL to Voice Adapter |
-| Voice Token | Authentication token |
-| TTS Speed | 0.5 - 2.0 |
-| Continuous Dialog Timeout | 3-10 seconds |
+| 设置项 | 说明 |
+|---------|------|
+| Hermes 地址 | 语音适配器的 WS/WSS 地址 |
+| Voice Token | 鉴权 token |
+| TTS 语速 | 0.5 - 2.0 |
+| 连续对话超时 | 3-10 秒 |
 
-## How it differs from other approaches
+## 跟其他方案的区别
 
-| Approach | Tools/Memory/Skills | Real-time streaming | Voice-first UX |
-|----------|:------------------:|:------------------:|:--------------:|
-| **Hermes Voice (this)** | ✅ Full | ✅ send_draft | ✅ Designed for it |
-| `/v1/chat/completions` API | ❌ None | ❌ SSE only | ❌ Text-first |
-| Dashboard `/api/ws` TUI | ✅ Full | ✅ | ❌ Terminal UI |
-| Telegram voice messages | ✅ Full | ❌ Batch | ❌ Tap to record |
+| 方案 | 工具/记忆/Skills | 实时流式 | 语音优先体验 |
+|------|:------------------:|:------------------:|:--------------:|
+| **Hermes Voice（本项目）** | ✅ 完整 | ✅ send_draft | ✅ 专为语音设计 |
+| `/v1/chat/completions` API | ❌ 无 | ❌ 仅 SSE | ❌ 文本优先 |
+| Dashboard `/api/ws` TUI | ✅ 完整 | ✅ | ❌ 终端界面 |
+| Telegram 语音消息 | ✅ 完整 | ❌ 批量 | ❌ 需手动点按录音 |
 
-## Model Files
+## 参与贡献
 
-The Android app requires offline AI models for STT, TTS, and wake word detection. These are **not** included in the repository due to their size (~350MB total). See the Client Setup section above for download instructions.
+欢迎贡献！以下方向尤其需要帮助：
 
-| Model | Directory | Size | Required | Source |
-|-------|-----------|------|----------|--------|
-| SenseVoice (offline STT) | `assets/sherpa-onnx/` | ~230MB | **Optional** | [k2-fsa/sherpa-onnx asr-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) |
-| Silero VAD | `assets/sherpa-onnx/` | ~630KB | Yes | [k2-fsa/sherpa-onnx asr-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) |
-| KWS Zipformer (wake word) | `assets/sherpa-onnx-kws/` | ~5MB | Yes | [k2-fsa/sherpa-onnx kws-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/kws-models) |
-| Matcha TTS (zh+en) | `assets/sherpa-onnx-tts/` | ~75MB | Yes | [k2-fsa/sherpa-onnx tts-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models) |
-| Vocos vocoder (16kHz) | `assets/sherpa-onnx-tts/` | ~52MB | Yes | [k2-fsa/sherpa-onnx vocoder-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/vocoder-models) |
-| Sherpa-ONNX JNI libs | `jniLibs/arm64-v8a/` | ~30MB | Yes | [k2-fsa/sherpa-onnx v1.13.3](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.3) |
-
-> **Minimal setup (~175MB):** Skip the SenseVoice model (step 1) — only TTS, VAD, KWS, and JNI libs are required. Online STT via Xunfei will be used exclusively.
-
-**Expected file structure after setup:**
-
-```
-app/src/main/
-├── assets/
-│   ├── sherpa-onnx/           # Offline STT (SenseVoice)
-│   │   ├── model.int8.onnx   # 229MB
-│   │   ├── tokens.txt         # 309KB
-│   │   └── silero_vad.onnx   # 629KB
-│   ├── sherpa-onnx-kws/       # Wake word detection
-│   │   ├── encoder.onnx       # 4.6MB
-│   │   ├── decoder.onnx       # 177KB
-│   │   ├── joiner.onnx        # 64KB
-│   │   ├── tokens.txt         # 1.6KB
-│   │   └── keywords.txt       # (in repo)
-│   └── sherpa-onnx-tts/       # Offline TTS (Matcha zh-en)
-│       ├── model-steps-3.onnx # 73MB
-│       ├── vocos.onnx         # 52MB (vocos-16khz-univ.onnx renamed)
-│       ├── lexicon.txt        # 1.4MB
-│       ├── tokens.txt         # 21KB
-│       ├── espeak-ng-data/    # English phoneme data
-│       ├── phone-zh.fst       # 87KB
-│       ├── date-zh.fst        # 58KB
-│       └── number-zh.fst      # 63KB
-└── jniLibs/
-    └── arm64-v8a/
-        ├── libonnxruntime.so  # 25MB
-        └── libsherpa-onnx-jni.so # 4.5MB
-```
-
-**Notes:**
-- The TTS model outputs at 16kHz (this is correct — `matcha-icefall-zh-en` is paired with `vocos-16khz-univ.onnx`, not the 22kHz variant)
-- The offline STT is only used as a fallback when Xunfei cloud STT is unavailable
-- KWS model is very lightweight (~5MB) and runs continuously with minimal CPU impact
-
-## Contributing
-
-Contributions welcome! Areas that need help:
-
-- [ ] iOS client
-- [ ] Wake word model training (custom hotword)
-- [ ] Multi-language STT support
-- [ ] Voice activity detection improvements
-- [ ] Alternative TTS engines (Edge TTS, Kokoro)
-- [ ] Car mode UI (large buttons, minimal info)
+- [ ] iOS 客户端
+- [ ] 唤醒词模型训练（自定义热词）
+- [ ] 多语言 STT 支持
+- [ ] 语音活动检测（VAD）优化
+- [ ] 其他 TTS 引擎（Edge TTS、Kokoro）
+- [ ] 车载模式 UI（大按钮、极简信息）
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT —— 详见 [LICENSE](LICENSE)。
 
-The vendored Sherpa-ONNX Kotlin bindings under
-`app/src/main/java/com/k2fsa/sherpa/onnx/` are Copyright (c) Xiaomi
-Corporation and remain licensed under
-[Apache License 2.0](app/src/main/java/com/k2fsa/sherpa/onnx/LICENSE-APACHE-2.0),
-not MIT.
+其中 `app/src/main/java/com/k2fsa/sherpa/onnx/` 下 vendor 进来的 Sherpa-ONNX
+Kotlin 绑定代码版权归 Xiaomi Corporation 所有，仍遵循
+[Apache License 2.0](app/src/main/java/com/k2fsa/sherpa/onnx/LICENSE-APACHE-2.0)，
+不适用 MIT。
