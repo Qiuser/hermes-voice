@@ -211,4 +211,9 @@ hermes pairing approve voice <CODE>
 
 ## License
 
-MIT
+MIT —— 详见 [LICENSE](LICENSE)。
+
+其中 `app/src/main/java/com/k2fsa/sherpa/onnx/` 下 vendor 进来的 Sherpa-ONNX
+Kotlin 绑定代码版权归 Xiaomi Corporation 所有，仍遵循
+[Apache License 2.0](app/src/main/java/com/k2fsa/sherpa/onnx/LICENSE-APACHE-2.0)，
+不适用 MIT。

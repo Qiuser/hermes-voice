@@ -260,4 +260,10 @@ Contributions welcome! Areas that need help:
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+The vendored Sherpa-ONNX Kotlin bindings under
+`app/src/main/java/com/k2fsa/sherpa/onnx/` are Copyright (c) Xiaomi
+Corporation and remain licensed under
+[Apache License 2.0](app/src/main/java/com/k2fsa/sherpa/onnx/LICENSE-APACHE-2.0),
+not MIT.
