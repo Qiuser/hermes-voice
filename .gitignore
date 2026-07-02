@@ -17,3 +17,4 @@ __pycache__/
 *$py.class
 .venv/
 *.egg-info/
+hermes-voice-spec.local.md

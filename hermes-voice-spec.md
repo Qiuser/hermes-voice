@@ -21,10 +21,10 @@ Voice Adapter 以 Hermes 插件形式运行，零源码修改，与飞书/微信
 |------|-----|
 | 插件位置 | `~/.hermes/hermes-agent/plugins/platforms/voice/` |
 | 监听端口 | `8650`（WebSocket） |
-| 健康检查 | `http://192.168.50.18:8650/health` |
-| 内网连接地址 | `ws://192.168.50.18:8650/ws` |
+| 健康检查 | `http://<YOUR_HERMES_HOST>:8650/health` |
+| 内网连接地址 | `ws://<YOUR_HERMES_HOST>:8650/ws` |
 | 外网连接地址 | 需通过 nginx 反代暴露 WSS（待配置） |
-| VOICE_TOKEN | `70665a739889a0a1ea761728eb4162919a15754e1ee33380fb6a36be5c85889b` |
+| VOICE_TOKEN | `<YOUR_VOICE_TOKEN>` |
 | 设备授权 | 首次连接需 pairing，已授权 `test_device` |
 
 ### 已验证的功能
@@ -90,7 +90,7 @@ Voice Adapter 以 Hermes 插件形式运行，零源码修改，与飞书/微信
 ### 连接地址
 
 ```
-内网测试: ws://192.168.50.18:8650/ws
+内网测试: ws://<YOUR_HERMES_HOST>:8650/ws
 外网生产: wss://你的域名:端口/ws  (通过 nginx 反代)
 ```
 
@@ -100,7 +100,7 @@ Voice Adapter 以 Hermes 插件形式运行，零源码修改，与飞书/微信
 
 ```json
 // 1. 鉴权（连接后必须第一条发送，10秒超时）
-{"type": "auth", "token": "70665a739889a0a1ea761728eb4162919a15754e1ee33380fb6a36be5c85889b", "device_id": "my_phone_001"}
+{"type": "auth", "token": "<YOUR_VOICE_TOKEN>", "device_id": "my_phone_001"}
 
 // 2. 发送消息（文字输入或讯飞识别后的文字）
 {"type": "message", "text": "发下信封管理后台"}
@@ -322,7 +322,7 @@ class VoiceWebSocketClient(
 
     fun connect() {
         val request = Request.Builder()
-            .url(config.wsUrl)  // ws://192.168.50.18:8650/ws
+            .url(config.wsUrl)  // ws://<YOUR_HERMES_HOST>:8650/ws
             .build()
         webSocket = okHttpClient.newWebSocket(request, listener)
     }
@@ -450,7 +450,7 @@ implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
 ## 注意事项
 
-1. 服务端已部署运行，App 可直接连 `ws://192.168.50.18:8650/ws` 测试
+1. 服务端已部署运行，App 可直接连 `ws://<YOUR_HERMES_HOST>:8650/ws` 测试
 2. 首次连接某个新 device_id 会触发 pairing，需要在服务器上 `hermes pairing approve voice <code>`
 3. 或设置 `VOICE_ALLOWED_DEVICES=*` 跳过 pairing（测试用）
 4. Agent 回复可能需要 5-15 秒（取决于是否调工具），App 的超时设长一些（建议 60s）
@@ -516,7 +516,7 @@ App 界面实时显示识别文字
 
 1. 在 Hermes 配置中添加讯飞凭据（✅ 已配置）：
 ```yaml
-XFYUN_APP_ID=1c51d8ed
+XFYUN_APP_ID=<YOUR_XFYUN_APP_ID>
 XFYUN_API_KEY=（已配置在服务器 .env）
 XFYUN_API_SECRET=（已配置在服务器 .env）
 ```
@@ -572,7 +572,7 @@ def generate_xfyun_url(api_key, api_secret):
 // App → 讯飞（首帧，带 header + parameter + payload）
 {
   "header": {
-    "app_id": "1c51d8ed",
+    "app_id": "<YOUR_XFYUN_APP_ID>",
     "status": 0
   },
   "parameter": {
@@ -604,7 +604,7 @@ def generate_xfyun_url(api_key, api_secret):
 
 // App → 讯飞（中间帧，不需要 parameter）
 {
-  "header": {"app_id": "1c51d8ed", "status": 1},
+  "header": {"app_id": "<YOUR_XFYUN_APP_ID>", "status": 1},
   "payload": {
     "audio": {
       "encoding": "raw",
@@ -620,7 +620,7 @@ def generate_xfyun_url(api_key, api_secret):
 
 // App → 讯飞（末帧）
 {
-  "header": {"app_id": "1c51d8ed", "status": 2},
+  "header": {"app_id": "<YOUR_XFYUN_APP_ID>", "status": 2},
   "payload": {
     "audio": {
       "encoding": "raw",
