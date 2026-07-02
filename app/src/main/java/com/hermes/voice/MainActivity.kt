@@ -1,13 +1,18 @@
 package com.hermes.voice
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.view.inputmethod.EditorInfo
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
@@ -44,11 +49,29 @@ class MainActivity : AppCompatActivity() {
         setupUI()
         observeState()
         startVoiceService()
+        checkBatteryOptimization()
     }
 
     override fun onResume() {
         super.onResume()
         viewModel.checkConfig()
+    }
+
+    private fun checkBatteryOptimization() {
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            AlertDialog.Builder(this)
+                .setTitle("关闭电池优化")
+                .setMessage("为保证语音助手在后台稳定运行，请允许 Hermes Voice 不受电池优化限制。")
+                .setPositiveButton("去设置") { _, _ ->
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                }
+                .setNegativeButton("稍后", null)
+                .show()
+        }
     }
 
     private fun startVoiceService() {
