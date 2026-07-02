@@ -46,6 +46,10 @@ class WakeWordDetector @Inject constructor(
             if (keywordSpotter == null) {
                 initSpotter()
             }
+            if (keywordSpotter == null) {
+                Log.d(TAG, "KWS not available, skipping")
+                return
+            }
             isRunning = true
             startDetecting()
         } catch (e: Exception) {
@@ -69,6 +73,14 @@ class WakeWordDetector @Inject constructor(
     }
 
     private fun initSpotter() {
+        // 检查模型文件是否存在
+        try {
+            context.assets.open("$KWS_DIR/encoder.onnx").close()
+        } catch (e: Exception) {
+            Log.d(TAG, "KWS model not found, wake word detection disabled")
+            return
+        }
+
         val config = KeywordSpotterConfig(
             modelConfig = OnlineModelConfig(
                 transducer = OnlineTransducerModelConfig(
