@@ -99,17 +99,62 @@ curl http://localhost:8650/health
 
 ### Client Setup
 
-1. Build the APK:
+1. **Download model files** (required, ~350MB total):
+
+```bash
+cd app/src/main/assets
+
+# 1. Offline STT - SenseVoice (fallback when Xunfei is unavailable)
+mkdir -p sherpa-onnx && cd sherpa-onnx
+wget https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2
+tar xjf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2 --strip-components=1 model.int8.onnx tokens.txt
+rm sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2
+wget -O silero_vad.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
+cd ..
+
+# 2. Wake Word Detection - KWS (keyword: "小马")
+mkdir -p sherpa-onnx-kws && cd sherpa-onnx-kws
+wget https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2
+tar xjf sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2 --strip-components=1
+cp encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx encoder.onnx
+cp decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx decoder.onnx
+cp joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx joiner.onnx
+rm -f *.tar.bz2 *.wav *epoch* test_wavs -rf
+cd ..
+# Note: keywords.txt is already in the repo
+
+# 3. Offline TTS - Matcha Chinese+English
+mkdir -p sherpa-onnx-tts && cd sherpa-onnx-tts
+wget https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/matcha-icefall-zh-en.tar.bz2
+tar xjf matcha-icefall-zh-en.tar.bz2 --strip-components=1
+rm matcha-icefall-zh-en.tar.bz2
+wget -O vocos.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos-16khz-univ.onnx
+cd ..
+```
+
+2. **Download native libraries** (required):
+
+```bash
+cd app/src/main/jniLibs
+wget https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.3/sherpa-onnx-v1.13.3-android.tar.bz2
+tar xjf sherpa-onnx-v1.13.3-android.tar.bz2
+# Keep only arm64-v8a (or whichever arch you need)
+mv jniLibs/arm64-v8a .
+rm -rf jniLibs sherpa-onnx-v1.13.3-android.tar.bz2
+cd ..
+```
+
+3. Build the APK:
 ```bash
 cd app
 ./gradlew assembleDebug
 ```
 
-2. Install on your phone and configure:
+4. Install on your phone and configure:
    - Hermes address: `ws://your-hermes-host:8650/ws`
    - Voice Token: (the token you generated above)
 
-3. First connection will trigger device pairing:
+5. First connection will trigger device pairing:
 ```bash
 hermes pairing approve voice <CODE>
 ```
@@ -153,6 +198,54 @@ See [hermes-voice-spec.md](hermes-voice-spec.md) for the complete protocol speci
 | `/v1/chat/completions` API | ❌ None | ❌ SSE only | ❌ Text-first |
 | Dashboard `/api/ws` TUI | ✅ Full | ✅ | ❌ Terminal UI |
 | Telegram voice messages | ✅ Full | ❌ Batch | ❌ Tap to record |
+
+## Model Files
+
+The Android app requires offline AI models for STT, TTS, and wake word detection. These are **not** included in the repository due to their size (~350MB total). See the Client Setup section above for download instructions.
+
+| Model | Directory | Size | Source |
+|-------|-----------|------|--------|
+| SenseVoice (offline STT) | `assets/sherpa-onnx/` | ~230MB | [k2-fsa/sherpa-onnx asr-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) |
+| Silero VAD | `assets/sherpa-onnx/` | ~630KB | [k2-fsa/sherpa-onnx asr-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) |
+| KWS Zipformer (wake word) | `assets/sherpa-onnx-kws/` | ~5MB | [k2-fsa/sherpa-onnx kws-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/kws-models) |
+| Matcha TTS (zh+en) | `assets/sherpa-onnx-tts/` | ~75MB | [k2-fsa/sherpa-onnx tts-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models) |
+| Vocos vocoder (16kHz) | `assets/sherpa-onnx-tts/` | ~52MB | [k2-fsa/sherpa-onnx vocoder-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/vocoder-models) |
+| Sherpa-ONNX JNI libs | `jniLibs/arm64-v8a/` | ~30MB | [k2-fsa/sherpa-onnx v1.13.3](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.3) |
+
+**Expected file structure after setup:**
+
+```
+app/src/main/
+├── assets/
+│   ├── sherpa-onnx/           # Offline STT (SenseVoice)
+│   │   ├── model.int8.onnx   # 229MB
+│   │   ├── tokens.txt         # 309KB
+│   │   └── silero_vad.onnx   # 629KB
+│   ├── sherpa-onnx-kws/       # Wake word detection
+│   │   ├── encoder.onnx       # 4.6MB
+│   │   ├── decoder.onnx       # 177KB
+│   │   ├── joiner.onnx        # 64KB
+│   │   ├── tokens.txt         # 1.6KB
+│   │   └── keywords.txt       # (in repo)
+│   └── sherpa-onnx-tts/       # Offline TTS (Matcha zh-en)
+│       ├── model-steps-3.onnx # 73MB
+│       ├── vocos.onnx         # 52MB (vocos-16khz-univ.onnx renamed)
+│       ├── lexicon.txt        # 1.4MB
+│       ├── tokens.txt         # 21KB
+│       ├── espeak-ng-data/    # English phoneme data
+│       ├── phone-zh.fst       # 87KB
+│       ├── date-zh.fst        # 58KB
+│       └── number-zh.fst      # 63KB
+└── jniLibs/
+    └── arm64-v8a/
+        ├── libonnxruntime.so  # 25MB
+        └── libsherpa-onnx-jni.so # 4.5MB
+```
+
+**Notes:**
+- The TTS model outputs at 16kHz (this is correct — `matcha-icefall-zh-en` is paired with `vocos-16khz-univ.onnx`, not the 22kHz variant)
+- The offline STT is only used as a fallback when Xunfei cloud STT is unavailable
+- KWS model is very lightweight (~5MB) and runs continuously with minimal CPU impact
 
 ## Contributing
 

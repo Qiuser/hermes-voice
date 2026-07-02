@@ -99,17 +99,61 @@ curl http://localhost:8650/health
 
 ### Client 端
 
-1. 编译 APK：
+1. **下载模型文件**（必需，共约 350MB）：
+
+```bash
+cd app/src/main/assets
+
+# 1. 离线 STT - SenseVoice（讯飞不可用时降级使用）
+mkdir -p sherpa-onnx && cd sherpa-onnx
+wget https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2
+tar xjf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2 --strip-components=1 model.int8.onnx tokens.txt
+rm sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2
+wget -O silero_vad.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
+cd ..
+
+# 2. 语音唤醒 - KWS（唤醒词："小马"）
+mkdir -p sherpa-onnx-kws && cd sherpa-onnx-kws
+wget https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2
+tar xjf sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2 --strip-components=1
+cp encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx encoder.onnx
+cp decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx decoder.onnx
+cp joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx joiner.onnx
+rm -f *.tar.bz2 *.wav *epoch* test_wavs -rf
+cd ..
+# 注意：keywords.txt 已在仓库中
+
+# 3. 离线 TTS - Matcha 中英双语
+mkdir -p sherpa-onnx-tts && cd sherpa-onnx-tts
+wget https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/matcha-icefall-zh-en.tar.bz2
+tar xjf matcha-icefall-zh-en.tar.bz2 --strip-components=1
+rm matcha-icefall-zh-en.tar.bz2
+wget -O vocos.onnx https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos-16khz-univ.onnx
+cd ..
+```
+
+2. **下载 Native 库**（必需）：
+
+```bash
+cd app/src/main/jniLibs
+wget https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.3/sherpa-onnx-v1.13.3-android.tar.bz2
+tar xjf sherpa-onnx-v1.13.3-android.tar.bz2
+mv jniLibs/arm64-v8a .
+rm -rf jniLibs sherpa-onnx-v1.13.3-android.tar.bz2
+cd ..
+```
+
+3. 编译 APK：
 ```bash
 cd app
 ./gradlew assembleDebug
 ```
 
-2. 安装到手机上并配置：
+4. 安装到手机上并配置：
    - Hermes 地址：`ws://your-hermes-host:8650/ws`
    - Voice Token：（上面生成的 token）
 
-3. 首次连接会触发设备配对：
+5. 首次连接会触发设备配对：
 ```bash
 hermes pairing approve voice <CODE>
 ```

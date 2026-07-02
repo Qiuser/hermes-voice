@@ -11,6 +11,14 @@
 .cxx
 local.properties
 
+# Model files (too large for git, see README for download instructions)
+app/src/main/assets/sherpa-onnx/*.onnx
+app/src/main/assets/sherpa-onnx/tokens.txt
+app/src/main/assets/sherpa-onnx-kws/*.onnx
+app/src/main/assets/sherpa-onnx-kws/tokens.txt
+app/src/main/assets/sherpa-onnx-tts/
+app/src/main/jniLibs/
+
 # Python
 __pycache__/
 *.py[cod]
