@@ -75,10 +75,10 @@ class SpeechRecognizerManager @Inject constructor(
     fun initialize() {
         if (isInitialized) return
         try {
-            initRecognizer()
             initVad()
+            initRecognizer() // 可选，模型不存在时跳过
             isInitialized = true
-            Log.d(TAG, "Sherpa-ONNX initialized successfully")
+            Log.d(TAG, "Sherpa-ONNX initialized, offlineAvailable=${recognizer != null}")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize Sherpa-ONNX", e)
             _events.tryEmit(SttEvent.Error(-1, "语音引擎初始化失败: ${e.message}"))
@@ -86,6 +86,14 @@ class SpeechRecognizerManager @Inject constructor(
     }
 
     private fun initRecognizer() {
+        // SenseVoice 离线模型是可选的，不存在时跳过
+        try {
+            context.assets.open("$MODEL_DIR/model.int8.onnx").close()
+        } catch (e: Exception) {
+            Log.d(TAG, "Offline STT model not found, skipping (online-only mode)")
+            return
+        }
+
         val config = OfflineRecognizerConfig(
             modelConfig = OfflineModelConfig(
                 senseVoice = OfflineSenseVoiceModelConfig(
@@ -106,6 +114,13 @@ class SpeechRecognizerManager @Inject constructor(
     }
 
     private fun initVad() {
+        try {
+            context.assets.open("$MODEL_DIR/silero_vad.onnx").close()
+        } catch (e: Exception) {
+            Log.w(TAG, "VAD model not found, VAD disabled")
+            return
+        }
+
         val config = VadModelConfig(
             sileroVadModelConfig = SileroVadModelConfig(
                 model = "$MODEL_DIR/silero_vad.onnx",
@@ -133,8 +148,11 @@ class SpeechRecognizerManager @Inject constructor(
 
         if (hasSttToken()) {
             startOnlineRecognition()
-        } else {
+        } else if (recognizer != null) {
             startOfflineRecognition()
+        } else {
+            Log.e(TAG, "No STT available (no token + no offline model)")
+            _events.tryEmit(SttEvent.Error(-1, "语音识别不可用，请检查网络连接"))
         }
     }
 
