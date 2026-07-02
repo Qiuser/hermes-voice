@@ -207,12 +207,12 @@ The Android app requires offline AI models for STT, TTS, and wake word detection
 |-------|-----------|------|----------|--------|
 | SenseVoice (offline STT) | `assets/sherpa-onnx/` | ~230MB | **Optional** | [k2-fsa/sherpa-onnx asr-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) |
 | Silero VAD | `assets/sherpa-onnx/` | ~630KB | Yes | [k2-fsa/sherpa-onnx asr-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) |
-| KWS Zipformer (wake word) | `assets/sherpa-onnx-kws/` | ~5MB | Optional | [k2-fsa/sherpa-onnx kws-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/kws-models) |
+| KWS Zipformer (wake word) | `assets/sherpa-onnx-kws/` | ~5MB | Yes | [k2-fsa/sherpa-onnx kws-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/kws-models) |
 | Matcha TTS (zh+en) | `assets/sherpa-onnx-tts/` | ~75MB | Yes | [k2-fsa/sherpa-onnx tts-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models) |
 | Vocos vocoder (16kHz) | `assets/sherpa-onnx-tts/` | ~52MB | Yes | [k2-fsa/sherpa-onnx vocoder-models](https://github.com/k2-fsa/sherpa-onnx/releases/tag/vocoder-models) |
 | Sherpa-ONNX JNI libs | `jniLibs/arm64-v8a/` | ~30MB | Yes | [k2-fsa/sherpa-onnx v1.13.3](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.3) |
 
-> **Minimal setup (~130MB):** Skip the SenseVoice model (step 1) and KWS model (step 2) — only TTS, VAD, and JNI libs are required. Online STT via Xunfei will be used exclusively; wake word detection will be disabled.
+> **Minimal setup (~175MB):** Skip the SenseVoice model (step 1) — only TTS, VAD, KWS, and JNI libs are required. Online STT via Xunfei will be used exclusively.
 
 **Expected file structure after setup:**
 
