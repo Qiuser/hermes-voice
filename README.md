@@ -8,7 +8,7 @@
 
 Hermes Voice 让你可以直接用语音跟你的 Hermes Agent 对话——按一下蓝牙耳机按键、说话、听回复。适合开车、走路，或任何不方便打字的场景。
 
-跟那些只是简单转发到 LLM API 的语音壁纸不同，Hermes Voice 以**平台适配器**的身份接入（跟 Telegram、Discord 适配器同级），因此能拿到完整的 Hermes 体验：
+跟那些只是简单转发到 LLM API 的语音套壳不同，Hermes Voice 以**平台适配器**的身份接入（跟 Telegram、Discord 适配器同级），因此能拿到完整的 Hermes 体验：
 
 - ✅ 全部工具（terminal、file、web_search、delegate_task……）
 - ✅ 持久记忆（Hindsight）
@@ -117,11 +117,11 @@ cd app
 ./gradlew assembleDebug
 ```
 
-4. 安装到手机上并配置：
+3. 安装到手机上并配置：
    - Hermes 地址：`ws://your-hermes-host:8650/ws`
    - Voice Token：（上面生成的 token）
 
-5. 首次连接会触发设备配对：
+4. 首次连接会触发设备配对：
 ```bash
 hermes pairing approve voice <CODE>
 ```
