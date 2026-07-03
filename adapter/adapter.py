@@ -223,8 +223,15 @@ class VoiceAdapter(BasePlatformAdapter):
             return True
         return device_id in self._allowed_devices
 
-    async def connect(self) -> bool:
-        """Start the WebSocket server."""
+    async def connect(self, *, is_reconnect: bool = False) -> bool:
+        """Start the WebSocket server.
+
+        ``is_reconnect`` is part of the BasePlatformAdapter.connect contract
+        (see gateway/platforms/base.py): False on a cold first boot, True
+        when the reconnect watcher is re-establishing a platform that
+        dropped after an outage. Voice has no server-side update queue to
+        preserve across reconnects, so the flag is accepted but unused.
+        """
         if not AIOHTTP_AVAILABLE:
             logger.warning("[Voice] aiohttp not available")
             return False
