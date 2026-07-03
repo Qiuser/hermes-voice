@@ -1,6 +1,6 @@
 # Hermes Voice
 
-[English](README_en.md) | 简体中文
+English | [简体中文](README.md)
 
 Voice platform adapter + Android client for [Hermes Agent](https://github.com/NousResearch/hermes-agent) — hands-free voice interaction via Bluetooth headset.
 
