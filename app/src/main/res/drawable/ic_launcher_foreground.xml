@@ -4,7 +4,49 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
+    <!-- Background circle gradient effect -->
     <path
-        android:fillColor="#1976D2"
-        android:pathData="M54,62c4.97,0 8.97,-4.02 8.97,-9L63,35c0,-4.97 -4.02,-9 -3,-9s-9,4.03 -9,9v18c0,4.98 4.02,9 9,9zM69.9,53c0,9 -7.62,15.3 -15.9,15.3S38.1,62 38.1,53H33c0,10.23 8.16,18.69 18,20.16V83h6v-9.84c9.84,-1.44 18,-9.9 18,-20.16h-5.1z" />
+        android:pathData="M54,54m-40,0a40,40 0,1,1 80,0a40,40 0,1,1 -80,0"
+        android:fillColor="#1A237E" />
+
+    <path
+        android:pathData="M54,54m-35,0a35,35 0,1,1 70,0a35,35 0,1,1 -70,0"
+        android:fillColor="#1565C0" />
+
+    <!-- Mic body -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,35c-4.42,0 -8,3.58 -8,8v16c0,4.42 3.58,8 8,8s8,-3.58 8,-8v-16c0,-4.42 -3.58,-8 -8,-8z" />
+
+    <!-- Mic arc -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:pathData="M38,59c0,8.84 7.16,16 16,16s16,-7.16 16,-16" />
+
+    <!-- Mic stand -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M52.5,75v7h3v-7z" />
+
+    <!-- Mic base -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M46,82h16v3h-16z" />
+
+    <!-- Sound waves left -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#64B5F6"
+        android:strokeWidth="2"
+        android:pathData="M30,54c0,-6 2,-12 5,-16" />
+
+    <!-- Sound waves right -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#64B5F6"
+        android:strokeWidth="2"
+        android:pathData="M78,54c0,-6 -2,-12 -5,-16" />
 </vector>
