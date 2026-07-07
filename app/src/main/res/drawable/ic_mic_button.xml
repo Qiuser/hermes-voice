@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+
+    <!-- Outer glow ring -->
+    <path
+        android:pathData="M60,60m-55,0a55,55 0,1,1 110,0a55,55 0,1,1 -110,0"
+        android:strokeWidth="1.5"
+        android:strokeColor="#402196F3"
+        android:fillColor="@android:color/transparent" />
+
+    <!-- Inner circle -->
+    <path
+        android:pathData="M60,60m-45,0a45,45 0,1,1 90,0a45,45 0,1,1 -90,0"
+        android:strokeWidth="2"
+        android:strokeColor="#2196F3"
+        android:fillColor="#1A2196F3" />
+
+    <!-- Mic body -->
+    <path
+        android:fillColor="#2196F3"
+        android:pathData="M60,38c-3.31,0 -6,2.69 -6,6v12c0,3.31 2.69,6 6,6s6,-2.69 6,-6v-12c0,-3.31 -2.69,-6 -6,-6z" />
+
+    <!-- Mic arc -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#2196F3"
+        android:strokeWidth="2.5"
+        android:pathData="M48,56c0,6.63 5.37,12 12,12s12,-5.37 12,-12" />
+
+    <!-- Mic stand -->
+    <path
+        android:fillColor="#2196F3"
+        android:pathData="M59,68v6h2v-6z" />
+
+    <!-- Mic base -->
+    <path
+        android:fillColor="#2196F3"
+        android:pathData="M54,74h12v2h-12z" />
+</vector>

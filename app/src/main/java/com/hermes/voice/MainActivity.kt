@@ -130,8 +130,25 @@ class MainActivity : AppCompatActivity() {
 
     private fun observeState() {
         viewModel.sessionState.observe(this) { state ->
-            binding.tvStatus.text = state.displayName
-            binding.btnStartSession.text = if (state.isActive) "结束对话" else "语音对话"
+            when (state) {
+                SessionState.IDLE -> {
+                    binding.tvStatus.text = "点击或说「你好小马」开始对话"
+                    binding.tvStatus.setTextColor(getColor(R.color.text_secondary))
+                    binding.btnStartSession.setImageResource(R.drawable.ic_mic_button)
+                }
+                SessionState.LISTENING -> {
+                    binding.tvStatus.text = "听取中..."
+                    binding.tvStatus.setTextColor(getColor(R.color.primary))
+                }
+                SessionState.THINKING -> {
+                    binding.tvStatus.text = "思考中..."
+                    binding.tvStatus.setTextColor(getColor(R.color.primary))
+                }
+                SessionState.SPEAKING -> {
+                    binding.tvStatus.text = "播报中..."
+                    binding.tvStatus.setTextColor(getColor(R.color.accent))
+                }
+            }
             binding.btnSend.isEnabled = state == SessionState.IDLE
         }
 
@@ -153,6 +170,13 @@ class MainActivity : AppCompatActivity() {
 
         viewModel.connectionStatus.observe(this) { status ->
             binding.tvConnection.text = status
+            val isConnected = status == "已连接"
+            binding.tvConnection.setTextColor(
+                getColor(if (isConnected) R.color.status_connected else R.color.status_disconnected)
+            )
+            binding.statusDot.setBackgroundResource(
+                if (isConnected) R.drawable.status_dot_green else R.drawable.status_dot_red
+            )
         }
     }
 }

@@ -5,72 +5,115 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
+    android:background="@color/background"
     android:padding="24dp">
+
+    <!-- 连接设置 -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="连接设置"
+        android:textSize="13sp"
+        android:textColor="@color/primary"
+        android:layout_marginBottom="8dp" />
 
     <com.google.android.material.textfield.TextInputLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="WebSocket 地址">
+        android:hint="WebSocket 地址"
+        app:hintTextColor="@color/text_secondary"
+        app:boxStrokeColor="@color/primary"
+        style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
 
         <com.google.android.material.textfield.TextInputEditText
             android:id="@+id/etApiUrl"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:inputType="textUri"
-            android:singleLine="true" />
+            android:singleLine="true"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
 
     </com.google.android.material.textfield.TextInputLayout>
 
     <com.google.android.material.textfield.TextInputLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="12dp"
         android:hint="Voice Token"
-        app:endIconMode="password_toggle">
+        app:hintTextColor="@color/text_secondary"
+        app:boxStrokeColor="@color/primary"
+        app:endIconMode="password_toggle"
+        style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
 
         <com.google.android.material.textfield.TextInputEditText
             android:id="@+id/etApiToken"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:inputType="textPassword"
-            android:singleLine="true" />
+            android:singleLine="true"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
 
     </com.google.android.material.textfield.TextInputLayout>
 
     <com.google.android.material.textfield.TextInputLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:hint="设备 ID">
+        android:layout_marginTop="12dp"
+        android:hint="设备 ID"
+        app:hintTextColor="@color/text_secondary"
+        app:boxStrokeColor="@color/primary"
+        style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
 
         <com.google.android.material.textfield.TextInputEditText
             android:id="@+id/etDeviceId"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:inputType="text"
-            android:singleLine="true" />
+            android:singleLine="true"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
 
     </com.google.android.material.textfield.TextInputLayout>
 
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/btnSave"
-        android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:layout_marginTop="32dp"
-        android:text="保存" />
+    <!-- 语音设置 -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="语音设置"
+        android:textSize="13sp"
+        android:textColor="@color/primary"
+        android:layout_marginTop="24dp"
+        android:layout_marginBottom="8dp" />
 
     <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/switchWakeWord"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="24dp"
-        android:text="语音唤醒（你好小马）" />
+        android:text="语音唤醒（你好小马）"
+        android:textColor="@color/text_primary"
+        android:padding="8dp" />
 
     <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/switchAutoContinue"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:text="自动连续对话" />
+        android:text="自动连续对话"
+        android:textColor="@color/text_primary"
+        android:padding="8dp" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnSave"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:text="保存设置"
+        android:textSize="15sp"
+        app:cornerRadius="12dp" />
 
 </LinearLayout>
