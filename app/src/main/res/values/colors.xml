@@ -1,17 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="primary">#2196F3</color>
-    <color name="primary_dark">#1976D2</color>
-    <color name="accent">#7C4DFF</color>
-    <color name="background">#121212</color>
-    <color name="surface">#1E1E1E</color>
-    <color name="card">#252525</color>
-    <color name="text_primary">#FFFFFF</color>
-    <color name="text_secondary">#B0B0B0</color>
-    <color name="text_hint">#666666</color>
-    <color name="status_connected">#4CAF50</color>
-    <color name="status_disconnected">#F44336</color>
-    <color name="user_message">#2196F3</color>
-    <color name="hermes_message">#7C4DFF</color>
-    <color name="divider">#2A2A2A</color>
+    <color name="primary">#5B8CFF</color>
+    <color name="primary_dark">#2F5BEA</color>
+    <color name="primary_soft">#335B8CFF</color>
+    <color name="accent">#9B7CFF</color>
+    <color name="accent_soft">#309B7CFF</color>
+    <color name="warning">#FFB74D</color>
+    <color name="warning_soft">#26FFB74D</color>
+
+    <color name="background">#080B14</color>
+    <color name="background_bottom">#101728</color>
+    <color name="surface">#141B2D</color>
+    <color name="surface_elevated">#1B2438</color>
+    <color name="card">#202A40</color>
+    <color name="card_stroke">#2F3A56</color>
+
+    <color name="text_primary">#F4F7FF</color>
+    <color name="text_secondary">#B7C0D8</color>
+    <color name="text_hint">#69738D</color>
+    <color name="text_muted">#7D89A6</color>
+
+    <color name="status_connected">#58D68D</color>
+    <color name="status_disconnected">#FF6B6B</color>
+    <color name="user_message">#5B8CFF</color>
+    <color name="hermes_message">#9B7CFF</color>
+    <color name="divider">#26314A</color>
 </resources>

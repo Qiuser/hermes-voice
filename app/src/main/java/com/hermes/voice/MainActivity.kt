@@ -149,8 +149,8 @@ class MainActivity : AppCompatActivity() {
                     binding.tvStatus.setTextColor(getColor(R.color.accent))
                 }
                 SessionState.APPROVAL_WAITING -> {
-                    binding.tvStatus.text = "审批中..."
-                    binding.tvStatus.setTextColor(getColor(R.color.accent))
+                    binding.tvStatus.text = "审批中... 请说允许或拒绝"
+                    binding.tvStatus.setTextColor(getColor(R.color.warning))
                 }
             }
             binding.btnSend.isEnabled = state == SessionState.IDLE
