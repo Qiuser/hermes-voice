@@ -186,6 +186,10 @@ class MainViewModel @Inject constructor(
                     is WsEvent.ToolStart -> {
                         _chatLog.postValue("${chatLogBuilder}[工具] ${event.description}...")
                     }
+                    is WsEvent.ApprovalRequest -> {
+                        appendWithTime("审批: ", "${event.description}\n命令: ${event.command}")
+                        _chatLog.postValue(chatLogBuilder.toString())
+                    }
                     is WsEvent.Error -> {
                         if (waitingForTextResponse || inVoiceSession) {
                             appendWithTime("错误: ", event.message)

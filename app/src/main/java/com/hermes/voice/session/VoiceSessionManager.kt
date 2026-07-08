@@ -28,6 +28,11 @@ class VoiceSessionManager @Inject constructor(
     private val audioFocusManager: AudioFocusManager,
     private val apiConfig: ApiConfig
 ) {
+    companion object {
+        private const val TAG = "VoiceSession"
+        private const val APPROVAL_TIMEOUT_MS = 15_000L
+    }
+
     private val scope = CoroutineScope(Dispatchers.Main + Job())
 
     private val _state = MutableStateFlow(SessionState.IDLE)
@@ -49,6 +54,11 @@ class VoiceSessionManager @Inject constructor(
     private var ttsJob: Job? = null
     private var wsJob: Job? = null
     private var tokenRefreshJob: Job? = null
+
+    // Approval state
+    private var pendingApprovalId: String? = null
+    private var approvalRetryCount = 0
+    private var approvalTimeoutJob: Job? = null
 
     fun initialize() {
         ttsManager.init()
@@ -76,33 +86,167 @@ class VoiceSessionManager @Inject constructor(
     }
 
     fun stopSession() {
+        cancelApprovalTimeout()
+        pendingApprovalId = null
         sttManager.stopListening()
         ttsManager.stop()
         audioFocusManager.releaseFocus()
         transitionTo(SessionState.IDLE)
     }
 
+    // ──────────────────────────────────────────────────────────────────────
+    // Approval handling
+    // ──────────────────────────────────────────────────────────────────────
+
+    private fun handleApprovalRequest(approvalId: String, command: String, description: String) {
+        Log.d(TAG, "Approval request: id=$approvalId cmd=${command.take(80)}")
+
+        // Save approval state
+        pendingApprovalId = approvalId
+        approvalRetryCount = 0
+
+        // Interrupt whatever is happening
+        val currentState = _state.value
+        when (currentState) {
+            SessionState.IDLE -> audioFocusManager.requestFocus()
+            SessionState.LISTENING -> sttManager.stopListening()
+            SessionState.SPEAKING -> ttsManager.stop()
+            else -> {} // THINKING / APPROVAL_WAITING — just override
+        }
+
+        // Build and speak the approval prompt
+        val prompt = buildApprovalPrompt(command, description)
+        transitionTo(SessionState.APPROVAL_WAITING)
+        ttsManager.speakImmediate(prompt)
+        // After TTS finishes, observeTts() will detect APPROVAL_WAITING and start STT
+    }
+
+    private fun buildApprovalPrompt(command: String, description: String): String {
+        val shortCmd = command.take(60).let { if (command.length > 60) "$it..." else it }
+        return "需要执行命令：$shortCmd。是否允许？"
+    }
+
+    private fun startApprovalListening() {
+        Log.d(TAG, "Starting approval STT listening")
+        // Request fresh STT token if needed
+        if (!sttManager.hasSttToken()) {
+            wsClient.requestSttToken()
+        }
+        // Start timeout
+        startApprovalTimeout()
+        // Start listening after short delay
+        scope.launch {
+            kotlinx.coroutines.delay(300)
+            sttManager.startListening()
+        }
+    }
+
+    private fun handleApprovalSttResult(text: String) {
+        Log.d(TAG, "Approval STT result: '$text'")
+        cancelApprovalTimeout()
+
+        val choice = resolveApprovalChoice(text)
+        if (choice != null) {
+            sendApprovalAndResume(choice)
+        } else {
+            // Didn't recognize intent
+            approvalRetryCount++
+            if (approvalRetryCount >= 2) {
+                // Give up, auto-deny
+                Log.d(TAG, "Approval: max retries, auto-deny")
+                sendApprovalAndResume("deny", feedback = "未识别到回复，已自动拒绝")
+            } else {
+                // Retry once
+                ttsManager.speakImmediate("没听清，请说允许或拒绝")
+                // TTS AllDone will trigger startApprovalListening() again
+            }
+        }
+    }
+
+    private fun sendApprovalAndResume(choice: String, feedback: String? = null) {
+        val approvalId = pendingApprovalId ?: return
+        Log.d(TAG, "Sending approval response: id=$approvalId choice=$choice")
+
+        wsClient.sendApprovalResponse(approvalId, choice)
+        pendingApprovalId = null
+        approvalRetryCount = 0
+
+        // Speak feedback
+        val msg = feedback ?: when (choice) {
+            "deny" -> "已拒绝"
+            "always" -> "已允许，以后同类命令不再询问"
+            else -> "已允许"
+        }
+        ttsManager.speakImmediate(msg)
+
+        // Transition to THINKING — agent will continue with a follow-up response
+        transitionTo(SessionState.THINKING)
+    }
+
+    private fun startApprovalTimeout() {
+        cancelApprovalTimeout()
+        approvalTimeoutJob = scope.launch {
+            kotlinx.coroutines.delay(APPROVAL_TIMEOUT_MS)
+            if (pendingApprovalId != null) {
+                Log.d(TAG, "Approval timeout, auto-deny")
+                sttManager.stopListening()
+                sendApprovalAndResume("deny", feedback = "超时未回复，已自动拒绝")
+            }
+        }
+    }
+
+    private fun cancelApprovalTimeout() {
+        approvalTimeoutJob?.cancel()
+        approvalTimeoutJob = null
+    }
+
+    private fun resolveApprovalChoice(text: String): String? {
+        val always = listOf("总是允许", "永远允许", "以后都允许", "一直允许")
+        val deny = listOf("拒绝", "不要", "取消", "不行", "否", "算了")
+        val allow = listOf("允许", "可以", "执行", "好的", "确认", "同意", "是", "行", "好", "嗯")
+
+        return when {
+            always.any { text.contains(it) } -> "always"
+            deny.any { text.contains(it) } -> "deny"
+            allow.any { text.contains(it) } -> "once"
+            else -> null
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Event observers
+    // ──────────────────────────────────────────────────────────────────────
+
     private fun observeStt() {
         sttJob = scope.launch {
             sttManager.events.collect { event ->
                 when (event) {
                     is SttEvent.Result -> {
-                        Log.d("VoiceSession", "STT result: ${event.text}, sending to WS")
-                        _transcript.tryEmit(event.text)
-                        transitionTo(SessionState.THINKING)
-                        wsClient.sendMessage(event.text)
-                        // 提示音：消息已发送
-                        ttsManager.playBeep(500, 100)
-                        // 预请求下一个 STT token（讯飞签名 URL 是一次性的）
-                        wsClient.requestSttToken()
+                        if (_state.value == SessionState.APPROVAL_WAITING) {
+                            // In approval mode — interpret as approval response
+                            handleApprovalSttResult(event.text)
+                        } else {
+                            // Normal conversation
+                            Log.d(TAG, "STT result: ${event.text}, sending to WS")
+                            _transcript.tryEmit(event.text)
+                            transitionTo(SessionState.THINKING)
+                            wsClient.sendMessage(event.text)
+                            // 提示音：消息已发送
+                            ttsManager.playBeep(500, 100)
+                            // 预请求下一个 STT token（讯飞签名 URL 是一次性的）
+                            wsClient.requestSttToken()
+                        }
                     }
                     is SttEvent.PartialResult -> {
                         // partial result 不发送，只通知 UI 临时展示
                         _partial.tryEmit(event.text)
                     }
                     is SttEvent.Error -> {
-                        Log.d("VoiceSession", "STT error: ${event.message}")
-                        if (_state.value == SessionState.LISTENING) {
+                        Log.d(TAG, "STT error: ${event.message}")
+                        if (_state.value == SessionState.APPROVAL_WAITING) {
+                            // STT failed during approval — timeout will handle it
+                            Log.d(TAG, "STT error during approval, waiting for timeout")
+                        } else if (_state.value == SessionState.LISTENING) {
                             _error.tryEmit(event.message)
                             stopSession()
                         }
@@ -118,7 +262,10 @@ class VoiceSessionManager @Inject constructor(
             ttsManager.events.collect { event ->
                 when (event) {
                     is TtsEvent.AllDone -> {
-                        if (_state.value == SessionState.SPEAKING) {
+                        if (_state.value == SessionState.APPROVAL_WAITING) {
+                            // Approval prompt finished — start listening for user's response
+                            startApprovalListening()
+                        } else if (_state.value == SessionState.SPEAKING) {
                             if (apiConfig.autoContinueEnabled) {
                                 // 播报完成 → 暂停 0.5 秒 → 提示音 → 继续监听
                                 kotlinx.coroutines.delay(500)
@@ -164,6 +311,9 @@ class VoiceSessionManager @Inject constructor(
                     }
                     is WsEvent.End -> {
                         // TTS finishStream 也由 ViewModel 驱动
+                    }
+                    is WsEvent.ApprovalRequest -> {
+                        handleApprovalRequest(event.approvalId, event.command, event.description)
                     }
                     is WsEvent.Busy -> {
                         ttsManager.speakImmediate(event.message)
