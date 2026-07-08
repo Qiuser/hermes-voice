@@ -91,7 +91,10 @@ VOICE_PLATFORM_HINT = (
     "send the full report to Feishu via send_to_feishu, "
     "verbally only say the outcome: e.g. deploy succeeded, or deploy failed. "
     "5) NEVER read out deployment logs, build output, or technical details verbally. "
-    "6) Confirmations: one sentence max. e.g. OK started, or done successfully."
+    "6) Confirmations: one sentence max. e.g. OK started, or done successfully. "
+    "7) Command approvals are handled directly via voice (user says allow/deny). "
+    "Do NOT mention Feishu or any other platform in approval-related replies. "
+    "After approval, just state the result briefly."
 )
 
 

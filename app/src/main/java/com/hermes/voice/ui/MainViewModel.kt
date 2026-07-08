@@ -261,6 +261,8 @@ class MainViewModel @Inject constructor(
             "Skill library updated",
             "File-mutation verifier",
             "No home channel",
+            "命令已批准",
+            "代理正在恢复",
         )
 
         fun shouldTts(content: String): Boolean {
