@@ -90,14 +90,22 @@
                     android:textStyle="bold"
                     android:textColor="@color/primary" />
 
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:text="WebSocket 地址"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/text_secondary" />
+
                 <com.google.android.material.textfield.TextInputLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
-                    android:hint="WebSocket 地址"
-                    app:hintTextColor="@color/text_secondary"
+                    android:layout_marginTop="6dp"
+                    app:hintEnabled="false"
                     app:boxBackgroundColor="@color/surface"
-                    app:boxStrokeColor="@color/primary"
+                    app:boxStrokeColor="@color/card_stroke"
                     app:boxCornerRadiusTopStart="16dp"
                     app:boxCornerRadiusTopEnd="16dp"
                     app:boxCornerRadiusBottomStart="16dp"
@@ -108,21 +116,30 @@
                         android:id="@+id/etApiUrl"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:hint="wss://example.com/ws"
                         android:inputType="textUri"
                         android:singleLine="true"
                         android:textColor="@color/text_primary"
-                        android:textColorHint="@color/text_hint"
+                        android:textColorHint="@color/text_muted"
                         android:textSize="14sp" />
                 </com.google.android.material.textfield.TextInputLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="Voice Token"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/text_secondary" />
 
                 <com.google.android.material.textfield.TextInputLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:hint="Voice Token"
-                    app:hintTextColor="@color/text_secondary"
+                    android:layout_marginTop="6dp"
+                    app:hintEnabled="false"
                     app:boxBackgroundColor="@color/surface"
-                    app:boxStrokeColor="@color/primary"
+                    app:boxStrokeColor="@color/card_stroke"
                     app:endIconMode="password_toggle"
                     app:endIconTint="@color/text_secondary"
                     app:boxCornerRadiusTopStart="16dp"
@@ -135,21 +152,30 @@
                         android:id="@+id/etApiToken"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:hint="Voice Token"
                         android:inputType="textPassword"
                         android:singleLine="true"
                         android:textColor="@color/text_primary"
-                        android:textColorHint="@color/text_hint"
+                        android:textColorHint="@color/text_muted"
                         android:textSize="14sp" />
                 </com.google.android.material.textfield.TextInputLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="设备 ID"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/text_secondary" />
 
                 <com.google.android.material.textfield.TextInputLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:hint="设备 ID"
-                    app:hintTextColor="@color/text_secondary"
+                    android:layout_marginTop="6dp"
+                    app:hintEnabled="false"
                     app:boxBackgroundColor="@color/surface"
-                    app:boxStrokeColor="@color/primary"
+                    app:boxStrokeColor="@color/card_stroke"
                     app:boxCornerRadiusTopStart="16dp"
                     app:boxCornerRadiusTopEnd="16dp"
                     app:boxCornerRadiusBottomStart="16dp"
@@ -160,10 +186,11 @@
                         android:id="@+id/etDeviceId"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:hint="device_id"
                         android:inputType="text"
                         android:singleLine="true"
                         android:textColor="@color/text_primary"
-                        android:textColorHint="@color/text_hint"
+                        android:textColorHint="@color/text_muted"
                         android:textSize="14sp" />
                 </com.google.android.material.textfield.TextInputLayout>
             </LinearLayout>
