@@ -183,12 +183,16 @@ class MainViewModel @Inject constructor(
                         appendWithTime("", event.content)
                         _chatLog.postValue(chatLogBuilder.toString())
                     }
+                    is WsEvent.Display -> {
+                        // 只展示不播报
+                        appendWithTime("", event.content)
+                        _chatLog.postValue(chatLogBuilder.toString())
+                    }
                     is WsEvent.ToolStart -> {
                         _chatLog.postValue("${chatLogBuilder}[工具] ${event.description}...")
                     }
                     is WsEvent.ApprovalRequest -> {
-                        appendWithTime("审批: ", "${event.description}\n命令: ${event.command}")
-                        _chatLog.postValue(chatLogBuilder.toString())
+                        // 详情已通过 display 消息展示，这里不重复
                     }
                     is WsEvent.Error -> {
                         if (waitingForTextResponse || inVoiceSession) {

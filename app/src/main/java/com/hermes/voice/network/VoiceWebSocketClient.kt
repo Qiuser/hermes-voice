@@ -158,6 +158,9 @@ class VoiceWebSocketClient @Inject constructor(
             "system" -> {
                 msg.content?.let { _events.tryEmit(WsEvent.System(it)) }
             }
+            "display" -> {
+                msg.content?.let { _events.tryEmit(WsEvent.Display(it)) }
+            }
             "stt_token" -> {
                 if (!msg.url.isNullOrBlank()) {
                     _events.tryEmit(WsEvent.SttToken(
@@ -192,6 +195,7 @@ sealed class WsEvent {
     data class TaskComplete(val task: String, val success: Boolean) : WsEvent()
     data class Busy(val message: String) : WsEvent()
     data class System(val content: String) : WsEvent()
+    data class Display(val content: String) : WsEvent()
     data class SttToken(val provider: String, val url: String, val expiresIn: Int, val appId: String) : WsEvent()
     data class Error(val message: String) : WsEvent()
 }

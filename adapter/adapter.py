@@ -519,6 +519,12 @@ class VoiceAdapter(BasePlatformAdapter):
         if not client:
             return SendResult(success=False, error="Device not connected")
 
+        # Push full command details as display-only (shown on screen, not spoken)
+        await client.send_json({
+            "type": "display",
+            "content": f"⚠️ 审批请求\n命令: {command[:500]}\n原因: {description}",
+        })
+
         approval_id = str(uuid.uuid4())
         ok = await client.send_json({
             "type": "approval_request",
