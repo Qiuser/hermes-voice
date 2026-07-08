@@ -137,19 +137,19 @@ class SpeechRecognizerManager @Inject constructor(
         )
     }
 
-    fun startListening() {
+    fun startListening(silenceTimeoutSec: Float = 5f) {
         if (!isInitialized) {
             initialize()
             if (!isInitialized) return
         }
 
-        Log.d(TAG, "startListening(), online=${hasSttToken()}")
+        Log.d(TAG, "startListening(), online=${hasSttToken()}, silenceTimeout=${silenceTimeoutSec}s")
         _events.tryEmit(SttEvent.Ready)
 
         if (hasSttToken()) {
-            startOnlineRecognition()
+            startOnlineRecognition(silenceTimeoutSec)
         } else if (recognizer != null) {
-            startOfflineRecognition()
+            startOfflineRecognition(silenceTimeoutSec)
         } else {
             Log.e(TAG, "No STT available (no token + no offline model)")
             _events.tryEmit(SttEvent.Error(-1, "语音识别不可用，请检查网络连接"))
@@ -158,7 +158,7 @@ class SpeechRecognizerManager @Inject constructor(
 
     // ========== 在线模式（讯飞）==========
 
-    private fun startOnlineRecognition() {
+    private fun startOnlineRecognition(silenceTimeoutSec: Float) {
         val url = xfyunUrl ?: return
         val appId = xfyunAppId ?: return
         tokenUsed = true // 标记已使用，下次需要新 token
@@ -205,7 +205,7 @@ class SpeechRecognizerManager @Inject constructor(
             val buffer = ShortArray(640) // 40ms @16kHz
             var speechDetected = false
             var silenceFrames = 0
-            val maxSilenceFrames = (SAMPLE_RATE * 5) / 640 // 5秒无声超时
+            val maxSilenceFrames = (SAMPLE_RATE * silenceTimeoutSec).toInt() / 640
 
             // 预缓冲
             val preBufferFrames = (SAMPLE_RATE * 1.0f).toInt() / 640 + 1
@@ -285,7 +285,7 @@ class SpeechRecognizerManager @Inject constructor(
 
     // ========== 离线模式（SenseVoice）==========
 
-    private fun startOfflineRecognition() {
+    private fun startOfflineRecognition(silenceTimeoutSec: Float) {
         val bufferSize = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
@@ -308,7 +308,7 @@ class SpeechRecognizerManager @Inject constructor(
             val allSamples = mutableListOf<Float>()
             var speechDetected = false
             var silenceFrames = 0
-            val maxSilenceFrames = (SAMPLE_RATE * 5) / (bufferSize / 2)
+            val maxSilenceFrames = (SAMPLE_RATE * silenceTimeoutSec).toInt() / (bufferSize / 2)
 
             val preBufferFrames = (SAMPLE_RATE * 1.0f).toInt() / (bufferSize / 2) + 1
             val preBuffer = ArrayDeque<FloatArray>(preBufferFrames + 1)

@@ -30,7 +30,8 @@ class VoiceSessionManager @Inject constructor(
 ) {
     companion object {
         private const val TAG = "VoiceSession"
-        private const val APPROVAL_TIMEOUT_MS = 15_000L
+        private const val APPROVAL_TIMEOUT_MS = 30_000L
+        private const val APPROVAL_SILENCE_TIMEOUT_SEC = 10f
     }
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
@@ -122,8 +123,14 @@ class VoiceSessionManager @Inject constructor(
     }
 
     private fun buildApprovalPrompt(command: String, description: String): String {
-        val shortCmd = command.take(60).let { if (command.length > 60) "$it..." else it }
-        return "需要执行命令：$shortCmd。是否允许？"
+        // 只提取命令名（第一个词），不读参数/URL，语音只播一句概括
+        val cmdName = command.trimStart()
+            .split(" ", "|", ";", "&&", "\n")
+            .first()
+            .split("/")
+            .last()
+            .ifBlank { "未知" }
+        return "需要执行 $cmdName 命令，是否允许？"
     }
 
     private fun startApprovalListening() {
@@ -134,10 +141,10 @@ class VoiceSessionManager @Inject constructor(
         }
         // Start timeout
         startApprovalTimeout()
-        // Start listening after short delay
+        // Start listening with longer silence timeout for approval
         scope.launch {
             kotlinx.coroutines.delay(300)
-            sttManager.startListening()
+            sttManager.startListening(silenceTimeoutSec = APPROVAL_SILENCE_TIMEOUT_SEC)
         }
     }
 
