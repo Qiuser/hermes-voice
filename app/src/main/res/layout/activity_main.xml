@@ -92,14 +92,50 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <ImageView
-            android:id="@+id/btnStartSession"
-            android:layout_width="164dp"
-            android:layout_height="164dp"
-            android:src="@drawable/mic_orb"
-            android:contentDescription="语音对话"
-            android:clickable="true"
-            android:focusable="true" />
+        <FrameLayout
+            android:layout_width="190dp"
+            android:layout_height="190dp"
+            android:clipChildren="false"
+            android:clipToPadding="false">
+
+            <View
+                android:id="@+id/pulseRing1"
+                android:layout_width="122dp"
+                android:layout_height="122dp"
+                android:layout_gravity="center"
+                android:alpha="0"
+                android:background="@drawable/bg_mic_ring_blue" />
+
+            <View
+                android:id="@+id/pulseRing2"
+                android:layout_width="122dp"
+                android:layout_height="122dp"
+                android:layout_gravity="center"
+                android:alpha="0"
+                android:background="@drawable/bg_mic_ring_blue" />
+
+            <View
+                android:id="@+id/pulseRing3"
+                android:layout_width="122dp"
+                android:layout_height="122dp"
+                android:layout_gravity="center"
+                android:alpha="0"
+                android:background="@drawable/bg_mic_ring_blue" />
+
+            <ImageView
+                android:id="@+id/btnStartSession"
+                android:layout_width="118dp"
+                android:layout_height="118dp"
+                android:layout_gravity="center"
+                android:background="@drawable/bg_mic_button_idle"
+                android:src="@drawable/ic_mic"
+                android:tint="@color/text_primary"
+                android:padding="36dp"
+                android:scaleType="fitCenter"
+                android:contentDescription="语音对话"
+                android:clickable="true"
+                android:focusable="true" />
+        </FrameLayout>
 
         <TextView
             android:id="@+id/tvStatus"

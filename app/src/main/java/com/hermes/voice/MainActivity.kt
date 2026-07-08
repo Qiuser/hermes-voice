@@ -135,55 +135,67 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateMicVisual(state: SessionState) {
+        binding.btnStartSession.setImageResource(R.drawable.ic_mic)
         when (state) {
             SessionState.IDLE -> {
-                micAnimatedState = null
                 stopMicPulse()
-                binding.btnStartSession.setImageResource(R.drawable.mic_orb)
+                binding.btnStartSession.setBackgroundResource(R.drawable.bg_mic_button_idle)
             }
             SessionState.APPROVAL_WAITING -> {
-                binding.btnStartSession.setImageResource(R.drawable.mic_orb_approval)
-                startMicPulse(state, durationMs = 760L, scale = 1.09f)
+                binding.btnStartSession.setBackgroundResource(R.drawable.bg_mic_button_approval)
+                startMicPulse(state, ringBackground = R.drawable.bg_mic_ring_amber, durationMs = 1800L)
             }
             SessionState.LISTENING -> {
-                binding.btnStartSession.setImageResource(R.drawable.mic_orb_active)
-                startMicPulse(state, durationMs = 680L, scale = 1.10f)
+                binding.btnStartSession.setBackgroundResource(R.drawable.bg_mic_button_active)
+                startMicPulse(state, ringBackground = R.drawable.bg_mic_ring_blue, durationMs = 1450L)
             }
             SessionState.THINKING -> {
-                binding.btnStartSession.setImageResource(R.drawable.mic_orb_active)
-                startMicPulse(state, durationMs = 1100L, scale = 1.05f)
+                binding.btnStartSession.setBackgroundResource(R.drawable.bg_mic_button_active)
+                startMicPulse(state, ringBackground = R.drawable.bg_mic_ring_blue, durationMs = 2200L)
             }
             SessionState.SPEAKING -> {
-                binding.btnStartSession.setImageResource(R.drawable.mic_orb_active)
-                startMicPulse(state, durationMs = 900L, scale = 1.07f)
+                binding.btnStartSession.setBackgroundResource(R.drawable.bg_mic_button_active)
+                startMicPulse(state, ringBackground = R.drawable.bg_mic_ring_blue, durationMs = 1700L)
             }
         }
     }
 
-    private fun startMicPulse(state: SessionState, durationMs: Long, scale: Float) {
+    private fun startMicPulse(state: SessionState, ringBackground: Int, durationMs: Long) {
         if (micPulseAnimator?.isStarted == true && micAnimatedState == state) return
         stopMicPulse()
         micAnimatedState = state
-        val scaleX = ObjectAnimator.ofFloat(binding.btnStartSession, "scaleX", 1f, scale).apply {
-            repeatCount = ValueAnimator.INFINITE
-            repeatMode = ValueAnimator.REVERSE
-            duration = durationMs
-            interpolator = AccelerateDecelerateInterpolator()
+
+        val rings = listOf(binding.pulseRing1, binding.pulseRing2, binding.pulseRing3)
+        val animators = mutableListOf<android.animation.Animator>()
+        rings.forEachIndexed { index, ring ->
+            ring.setBackgroundResource(ringBackground)
+            ring.scaleX = 1f
+            ring.scaleY = 1f
+            ring.alpha = 0f
+
+            val delay = index * (durationMs / 3)
+            animators += ObjectAnimator.ofFloat(ring, "scaleX", 1f, 1.85f).apply {
+                repeatCount = ValueAnimator.INFINITE
+                duration = durationMs
+                startDelay = delay
+                interpolator = AccelerateDecelerateInterpolator()
+            }
+            animators += ObjectAnimator.ofFloat(ring, "scaleY", 1f, 1.85f).apply {
+                repeatCount = ValueAnimator.INFINITE
+                duration = durationMs
+                startDelay = delay
+                interpolator = AccelerateDecelerateInterpolator()
+            }
+            animators += ObjectAnimator.ofFloat(ring, "alpha", 0.34f, 0f).apply {
+                repeatCount = ValueAnimator.INFINITE
+                duration = durationMs
+                startDelay = delay
+                interpolator = AccelerateDecelerateInterpolator()
+            }
         }
-        val scaleY = ObjectAnimator.ofFloat(binding.btnStartSession, "scaleY", 1f, scale).apply {
-            repeatCount = ValueAnimator.INFINITE
-            repeatMode = ValueAnimator.REVERSE
-            duration = durationMs
-            interpolator = AccelerateDecelerateInterpolator()
-        }
-        val alpha = ObjectAnimator.ofFloat(binding.btnStartSession, "alpha", 0.9f, 1f).apply {
-            repeatCount = ValueAnimator.INFINITE
-            repeatMode = ValueAnimator.REVERSE
-            duration = durationMs
-            interpolator = AccelerateDecelerateInterpolator()
-        }
+
         micPulseAnimator = AnimatorSet().apply {
-            playTogether(scaleX, scaleY, alpha)
+            playTogether(animators)
             start()
         }
     }
@@ -191,9 +203,15 @@ class MainActivity : AppCompatActivity() {
     private fun stopMicPulse() {
         micPulseAnimator?.cancel()
         micPulseAnimator = null
+        micAnimatedState = null
         binding.btnStartSession.scaleX = 1f
         binding.btnStartSession.scaleY = 1f
         binding.btnStartSession.alpha = 1f
+        listOf(binding.pulseRing1, binding.pulseRing2, binding.pulseRing3).forEach { ring ->
+            ring.alpha = 0f
+            ring.scaleX = 1f
+            ring.scaleY = 1f
+        }
     }
 
     override fun onDestroy() {
