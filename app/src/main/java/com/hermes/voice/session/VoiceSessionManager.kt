@@ -174,7 +174,14 @@ class VoiceSessionManager @Inject constructor(
         val approvalId = pendingApprovalId ?: return
         Log.d(TAG, "Sending approval response: id=$approvalId choice=$choice")
 
-        wsClient.sendApprovalResponse(approvalId, choice)
+        // Gateway expects /approve or /deny as a normal message, not approval_response
+        val command = when (choice) {
+            "always" -> "/approve always"
+            "deny" -> "/deny"
+            else -> "/approve"
+        }
+        wsClient.sendMessage(command)
+
         pendingApprovalId = null
         approvalRetryCount = 0
 
