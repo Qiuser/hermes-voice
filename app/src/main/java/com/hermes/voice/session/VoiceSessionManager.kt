@@ -166,6 +166,23 @@ class VoiceSessionManager @Inject constructor(
         transitionTo(SessionState.THINKING)
     }
 
+    private fun startApprovalTimeout() {
+        cancelApprovalTimeout()
+        approvalTimeoutJob = scope.launch {
+            kotlinx.coroutines.delay(APPROVAL_TIMEOUT_MS)
+            if (pendingApprovalId != null) {
+                Log.d(TAG, "Approval timeout, auto-deny")
+                sttManager.stopListening()
+                // Timeout — send /deny directly
+                wsClient.sendMessage("/deny")
+                pendingApprovalId = null
+                approvalRetryCount = 0
+                ttsManager.speakImmediate("超时未回复，已自动拒绝")
+                transitionTo(SessionState.THINKING)
+            }
+        }
+    }
+
     private fun cancelApprovalTimeout() {
         approvalTimeoutJob?.cancel()
         approvalTimeoutJob = null

@@ -674,7 +674,7 @@ class VoiceAdapter(BasePlatformAdapter):
                         {
                             "role": "system",
                             "content": (
-                                "你是一个意图分类器。用户被询问"是否允许执行某个命令"，"
+                                "你是一个意图分类器。用户被询问'是否允许执行某个命令'，"
                                 "你需要根据用户的回答判断意图。\n"
                                 "只回复一个词：approve（同意执行）、deny（拒绝执行）"
                                 "或 always（以后都允许）。\n"
