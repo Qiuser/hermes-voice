@@ -152,79 +152,23 @@ class VoiceSessionManager @Inject constructor(
         Log.d(TAG, "Approval STT result: '$text'")
         cancelApprovalTimeout()
 
-        val choice = resolveApprovalChoice(text)
-        if (choice != null) {
-            sendApprovalAndResume(choice)
-        } else {
-            // Didn't recognize intent
-            approvalRetryCount++
-            if (approvalRetryCount >= 2) {
-                // Give up, auto-deny
-                Log.d(TAG, "Approval: max retries, auto-deny")
-                sendApprovalAndResume("deny", feedback = "未识别到回复，已自动拒绝")
-            } else {
-                // Retry once
-                ttsManager.speakImmediate("没听清，请说允许或拒绝")
-                // TTS AllDone will trigger startApprovalListening() again
-            }
-        }
-    }
-
-    private fun sendApprovalAndResume(choice: String, feedback: String? = null) {
         val approvalId = pendingApprovalId ?: return
-        Log.d(TAG, "Sending approval response: id=$approvalId choice=$choice")
+        Log.d(TAG, "Sending approval reply to server for LLM classification: '$text'")
 
-        // Gateway expects /approve or /deny as a normal message, not approval_response
-        val command = when (choice) {
-            "always" -> "/approve always"
-            "deny" -> "/deny"
-            else -> "/approve"
-        }
-        wsClient.sendMessage(command)
+        // Send raw text to server — LLM will classify intent
+        wsClient.sendApprovalReply(approvalId, text)
 
         pendingApprovalId = null
         approvalRetryCount = 0
 
-        // Speak feedback
-        val msg = feedback ?: when (choice) {
-            "deny" -> "已拒绝"
-            "always" -> "已允许，以后同类命令不再询问"
-            else -> "已允许"
-        }
-        ttsManager.speakImmediate(msg)
-
-        // Transition to THINKING — agent will continue with a follow-up response
+        // Brief feedback and wait for server's response
+        ttsManager.speakImmediate("正在处理")
         transitionTo(SessionState.THINKING)
-    }
-
-    private fun startApprovalTimeout() {
-        cancelApprovalTimeout()
-        approvalTimeoutJob = scope.launch {
-            kotlinx.coroutines.delay(APPROVAL_TIMEOUT_MS)
-            if (pendingApprovalId != null) {
-                Log.d(TAG, "Approval timeout, auto-deny")
-                sttManager.stopListening()
-                sendApprovalAndResume("deny", feedback = "超时未回复，已自动拒绝")
-            }
-        }
     }
 
     private fun cancelApprovalTimeout() {
         approvalTimeoutJob?.cancel()
         approvalTimeoutJob = null
-    }
-
-    private fun resolveApprovalChoice(text: String): String? {
-        val always = listOf("总是允许", "永远允许", "以后都允许", "一直允许")
-        val deny = listOf("拒绝", "不要", "取消", "不行", "否", "算了")
-        val allow = listOf("允许", "可以", "执行", "好的", "确认", "同意", "是", "行", "好", "嗯")
-
-        return when {
-            always.any { text.contains(it) } -> "always"
-            deny.any { text.contains(it) } -> "deny"
-            allow.any { text.contains(it) } -> "once"
-            else -> null
-        }
     }
 
     // ──────────────────────────────────────────────────────────────────────

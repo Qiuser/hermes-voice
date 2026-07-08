@@ -102,6 +102,12 @@ class VoiceWebSocketClient @Inject constructor(
         webSocket?.send(gson.toJson(msg))
     }
 
+    fun sendApprovalReply(approvalId: String, text: String) {
+        if (!authenticated) return
+        val msg = ApprovalReplyMessage(approvalId = approvalId, text = text)
+        webSocket?.send(gson.toJson(msg))
+    }
+
     fun sendCommand(cmd: String) {
         if (!authenticated) return
         val msg = CommandMessage(cmd = cmd)

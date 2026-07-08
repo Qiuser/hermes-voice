@@ -23,6 +23,13 @@ data class ApprovalResponseMessage(
     val choice: String // "once" | "session" | "always" | "deny"
 )
 
+data class ApprovalReplyMessage(
+    val type: String = "approval_reply",
+    @SerializedName("approval_id")
+    val approvalId: String,
+    val text: String // 用户原始语音文本，由服务端 LLM 分类
+)
+
 data class CommandMessage(
     val type: String = "command",
     val cmd: String // "stop" | "new"

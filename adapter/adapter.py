@@ -470,6 +470,12 @@ class VoiceAdapter(BasePlatformAdapter):
                 if not future.done():
                     future.set_result(choice)
 
+        elif msg_type == "approval_reply":
+            # User's raw voice text for approval — classify intent via LLM
+            user_text = data.get("text", "").strip()
+            if user_text:
+                await self._handle_approval_reply(client, user_text)
+
         elif msg_type == "command":
             cmd = data.get("cmd", "")
             if cmd == "stop":
@@ -621,6 +627,82 @@ class VoiceAdapter(BasePlatformAdapter):
                 "url": "",
                 "error": str(e),
             })
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Approval intent classification (LLM-based)
+    # ──────────────────────────────────────────────────────────────────────
+
+    async def _handle_approval_reply(self, client: VoiceClient, user_text: str) -> None:
+        """Classify user's voice reply and inject /approve or /deny command."""
+        logger.info("[Voice] Approval reply from %s: '%s'", client.device_id, user_text)
+        try:
+            intent = await self._resolve_approval_intent(user_text)
+        except Exception as e:
+            logger.warning("[Voice] Approval intent classification failed: %s", e)
+            intent = "deny"
+
+        logger.info("[Voice] Classified intent: %s", intent)
+
+        if intent == "always":
+            await self._process_user_message(client, "/approve always")
+        elif intent == "approve":
+            await self._process_user_message(client, "/approve")
+        else:
+            await self._process_user_message(client, "/deny")
+
+    async def _resolve_approval_intent(self, user_text: str) -> str:
+        """Use Hermes auxiliary LLM to classify approval intent.
+
+        Returns: 'approve', 'deny', or 'always'.
+        """
+        try:
+            from agent.auxiliary_client import get_async_text_auxiliary_client
+        except ImportError:
+            logger.warning("[Voice] Cannot import auxiliary_client, falling back to deny")
+            return "deny"
+
+        client, model = get_async_text_auxiliary_client(task="voice_approval")
+        if not client:
+            logger.warning("[Voice] No auxiliary client available, falling back to deny")
+            return "deny"
+
+        try:
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "你是一个意图分类器。用户被询问"是否允许执行某个命令"，"
+                                "你需要根据用户的回答判断意图。\n"
+                                "只回复一个词：approve（同意执行）、deny（拒绝执行）"
+                                "或 always（以后都允许）。\n"
+                                "不要回复其他任何内容。"
+                            ),
+                        },
+                        {"role": "user", "content": user_text},
+                    ],
+                    max_tokens=5,
+                    temperature=0,
+                ),
+                timeout=8.0,
+            )
+            result = response.choices[0].message.content.strip().lower()
+            if result in ("approve", "deny", "always"):
+                return result
+            # Fuzzy match
+            if "approve" in result or "always" in result:
+                return "approve"
+            return "deny"
+        except asyncio.TimeoutError:
+            logger.warning("[Voice] Approval intent LLM timed out")
+            return "deny"
+        except Exception as e:
+            logger.warning("[Voice] Approval intent LLM error: %s", e)
+            return "deny"
+        finally:
+            await client.close()
 
     async def _heartbeat_loop(self, interval: float = 25.0) -> None:
         """Send periodic ping to all connected clients."""
