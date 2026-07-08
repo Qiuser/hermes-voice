@@ -49,6 +49,13 @@ class ConnectionManager @Inject constructor(
         _connectionState.value = ConnectionState.DISCONNECTED
     }
 
+    fun restart() {
+        Log.d("VoiceWS", "restart() with latest config")
+        stop()
+        retryCount = 0
+        start()
+    }
+
     private fun observeEvents() {
         if (observeJob != null) return
         observeJob = scope.launch {

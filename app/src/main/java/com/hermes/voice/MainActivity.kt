@@ -135,26 +135,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateMicVisual(state: SessionState) {
-        binding.btnStartSession.setImageResource(R.drawable.ic_mic)
+        binding.btnStartSession.setImageResource(R.drawable.mic_icon_premium)
         when (state) {
             SessionState.IDLE -> {
                 stopMicPulse()
-                binding.btnStartSession.setBackgroundResource(R.drawable.bg_mic_button_idle)
             }
             SessionState.APPROVAL_WAITING -> {
-                binding.btnStartSession.setBackgroundResource(R.drawable.bg_mic_button_approval)
                 startMicPulse(state, ringBackground = R.drawable.bg_mic_ring_amber, durationMs = 1800L)
             }
             SessionState.LISTENING -> {
-                binding.btnStartSession.setBackgroundResource(R.drawable.bg_mic_button_active)
                 startMicPulse(state, ringBackground = R.drawable.bg_mic_ring_blue, durationMs = 1450L)
             }
             SessionState.THINKING -> {
-                binding.btnStartSession.setBackgroundResource(R.drawable.bg_mic_button_active)
                 startMicPulse(state, ringBackground = R.drawable.bg_mic_ring_blue, durationMs = 2200L)
             }
             SessionState.SPEAKING -> {
-                binding.btnStartSession.setBackgroundResource(R.drawable.bg_mic_button_active)
                 startMicPulse(state, ringBackground = R.drawable.bg_mic_ring_blue, durationMs = 1700L)
             }
         }

@@ -124,13 +124,10 @@
 
             <ImageView
                 android:id="@+id/btnStartSession"
-                android:layout_width="118dp"
-                android:layout_height="118dp"
+                android:layout_width="154dp"
+                android:layout_height="154dp"
                 android:layout_gravity="center"
-                android:background="@drawable/bg_mic_button_idle"
-                android:src="@drawable/ic_mic"
-                android:tint="@color/text_primary"
-                android:padding="36dp"
+                android:src="@drawable/mic_icon_premium"
                 android:scaleType="fitCenter"
                 android:contentDescription="语音对话"
                 android:clickable="true"
