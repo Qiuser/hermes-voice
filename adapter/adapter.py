@@ -57,6 +57,7 @@ import os
 import re
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 try:
@@ -519,6 +520,17 @@ class VoiceAdapter(BasePlatformAdapter):
         if not text or not text.strip():
             return
         """Route user message through the gateway message pipeline."""
+        text = text.strip()
+        if not text.startswith("/") and not self._has_active_voice_context(client.device_id):
+            if await self._requires_missing_context_clarification(text):
+                logger.info(
+                    "[Voice] Clarifying context-dependent utterance without active context: device=%s text=%r",
+                    client.device_id,
+                    text,
+                )
+                await self._send_missing_context_clarification(client, text)
+                return
+
         source = self.build_source(
             chat_id=client.device_id,
             chat_name=f"Voice:{client.device_id}",
@@ -573,6 +585,104 @@ class VoiceAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Send failed")
 
         return SendResult(success=True, message_id=approval_id)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Missing-context guard
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _has_active_voice_context(self, device_id: str) -> bool:
+        """Return True when the voice route already has live conversation context."""
+        try:
+            sessions_path = Path.home() / ".hermes" / "sessions" / "sessions.json"
+            data = json.loads(sessions_path.read_text())
+            entry = data.get(f"agent:main:voice:dm:{device_id}") or {}
+            session_id = str(entry.get("session_id") or "")
+            if not session_id:
+                return False
+            if entry.get("expiry_finalized") or entry.get("suspended") or entry.get("resume_pending"):
+                return False
+            if entry.get("is_fresh_reset") or entry.get("was_auto_reset"):
+                return False
+            return bool(entry.get("reset_had_activity") or entry.get("updated_at"))
+        except Exception as e:
+            logger.warning("[Voice] Failed to check active voice context: %s", e)
+            # Fail closed: if we cannot prove context exists, ask for clarification.
+            return False
+
+    async def _requires_missing_context_clarification(self, text: str) -> bool:
+        """Use a small LLM classifier to decide whether an utterance needs prior context."""
+        fallback = self._requires_missing_context_clarification_fallback(text)
+        try:
+            from agent.auxiliary_client import get_async_text_auxiliary_client
+        except ImportError:
+            return fallback
+
+        aux_client, model = get_async_text_auxiliary_client(task="voice_missing_context_guard")
+        if not aux_client:
+            return fallback
+
+        try:
+            response = await asyncio.wait_for(
+                aux_client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "你是语音助手的安全分类器。当前语音会话没有可用前文。\n"
+                                "判断用户这句话在没有上下文时能否安全、明确地执行。\n"
+                                "只输出一个英文词：standalone 或 dependent。\n\n"
+                                "输出 dependent：这句话依赖前文、指代不明、对象/动作/数量不完整，"
+                                "或如果直接执行可能触发部署、远程命令、审批、删除、停止等副作用但目标不明确。\n"
+                                "输出 standalone：这句话本身已经完整说明了要做什么、对象是什么，"
+                                "即使没有前文也能安全理解；普通问候或闲聊也算 standalone。\n\n"
+                                "例子：\n"
+                                "再发三个 => dependent\n继续 => dependent\n按刚才那个执行 => dependent\n这个秘密是干嘛的 => dependent\n全部停掉 => dependent\n部署 envo-admin-service 到测试环境 => standalone\n今天北京天气怎么样 => standalone\n你好 => standalone\n"
+                                "不要解释，不要加标点。"
+                            ),
+                        },
+                        {"role": "user", "content": f"用户原话：{text}\n输出："},
+                    ],
+                    max_tokens=32,
+                    temperature=0,
+                ),
+                timeout=6.0,
+            )
+            result = (response.choices[0].message.content or "").strip().lower()
+            logger.info("[Voice] Missing-context guard raw LLM result: %r", result)
+            if "dependent" in result:
+                return True
+            if "standalone" in result:
+                return False
+            return fallback
+        except asyncio.TimeoutError:
+            logger.warning("[Voice] Missing-context guard LLM timed out")
+            return fallback
+        except Exception as e:
+            logger.warning("[Voice] Missing-context guard LLM error: %s", e)
+            return fallback
+        finally:
+            await aux_client.close()
+
+    @staticmethod
+    def _requires_missing_context_clarification_fallback(text: str) -> bool:
+        """Conservative fallback when the LLM classifier is unavailable."""
+        normalized = re.sub(r"\s+", "", text.strip().lower())
+        if not normalized:
+            return False
+        ambiguous_markers = (
+            "继续", "再", "刚才", "上面", "前面", "那个", "这个", "它", "他们", "这些", "那些",
+            "照旧", "一样", "按原", "按之前", "执行吧", "发几个", "发三个", "停掉", "取消掉",
+        )
+        if any(marker in normalized for marker in ambiguous_markers):
+            return True
+        return len(normalized) <= 8 and not re.search(r"[a-z0-9]\w{2,}", normalized)
+
+    async def _send_missing_context_clarification(self, client: VoiceClient, text: str) -> None:
+        message = "当前语音会话没有前文，我不确定你指的是什么。请完整说一遍要执行的任务。"
+        await client.send_json({"type": "display", "content": f"需要澄清: {text}\n{message}"})
+        await client.send_json({"type": "delta", "content": message})
+        await client.send_json({"type": "end", "finish_reason": "clarify"})
 
     # ──────────────────────────────────────────────────────────────────────
     # Utility

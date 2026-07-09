@@ -31,6 +31,7 @@ class VoiceSessionManager @Inject constructor(
     companion object {
         private const val TAG = "VoiceSession"
         private const val APPROVAL_TIMEOUT_MS = 30_000L
+        private const val EXPIRED_APPROVAL_REPLY_WINDOW_MS = 5 * 60_000L
         private const val APPROVAL_SILENCE_TIMEOUT_SEC = 10f
         private const val PAIRING_POLL_INTERVAL_MS = 3_000L
         private const val PAIRING_MAX_POLLS = 40
@@ -58,14 +59,21 @@ class VoiceSessionManager @Inject constructor(
     private var ttsJob: Job? = null
     private var wsJob: Job? = null
     private var tokenRefreshJob: Job? = null
+    private var initialized = false
 
     // Approval state
     private var pendingApprovalId: String? = null
     private var approvalRetryCount = 0
     private var approvalTimeoutJob: Job? = null
+    private var approvalExpiredAt: Long? = null
     private var pairingPollJob: Job? = null
 
     fun initialize() {
+        if (initialized) {
+            Log.d(TAG, "initialize() ignored: already initialized")
+            return
+        }
+        initialized = true
         ttsManager.init()
         sttManager.initialize()
         observeStt()
@@ -95,6 +103,10 @@ class VoiceSessionManager @Inject constructor(
         audioFocusManager.requestFocus()
         transitionTo(SessionState.LISTENING)
 
+        if (isExpiredApprovalReplyWindowActive()) {
+            Log.d(TAG, "Starting voice session for timed-out approval reply: id=$pendingApprovalId")
+        }
+
         ensureSttTokenBuffer()
 
         // 延迟 500ms 再开始录音（给 token 请求留时间，也给"嗯"播完留时间）
@@ -114,6 +126,7 @@ class VoiceSessionManager @Inject constructor(
         cancelApprovalTimeout()
         stopPairingPolling()
         pendingApprovalId = null
+        approvalExpiredAt = null
         sttManager.stopListening()
         ttsManager.stop()
         audioFocusManager.releaseFocus()
@@ -127,34 +140,36 @@ class VoiceSessionManager @Inject constructor(
     private fun handleApprovalRequest(approvalId: String, command: String, description: String) {
         Log.d(TAG, "Approval request: id=$approvalId cmd=${command.take(80)}")
 
-        // Save approval state
-        pendingApprovalId = approvalId
-        approvalRetryCount = 0
-        ensureSttTokenBuffer() // 讯飞 token 一次性使用，审批回复需要提前预取
+        if (approvalId.isNotBlank() && pendingApprovalId == approvalId && _state.value == SessionState.APPROVAL_WAITING) {
+            Log.d(TAG, "Duplicate approval request ignored: id=$approvalId")
+            return
+        }
 
-        // Interrupt whatever is happening
-        val currentState = _state.value
-        when (currentState) {
+        pendingApprovalId = approvalId
+        approvalExpiredAt = null
+        approvalRetryCount = 0
+        startApprovalTimeout()
+        ensureSttTokenBuffer()
+
+        when (_state.value) {
             SessionState.IDLE -> audioFocusManager.requestFocus()
             SessionState.LISTENING -> sttManager.stopListening()
             SessionState.SPEAKING -> ttsManager.stop()
-            else -> {} // THINKING / APPROVAL_WAITING — just override
+            else -> {}
         }
 
-        // Build and speak the approval prompt
-        val prompt = buildApprovalPrompt(command, description)
         transitionTo(SessionState.APPROVAL_WAITING)
-        ttsManager.speakImmediate(prompt)
-        // After TTS finishes, observeTts() will detect APPROVAL_WAITING and start STT
+        ttsManager.speakImmediate(buildApprovalPrompt(command, description))
     }
 
     private fun handleApprovalClarify(approvalId: String, message: String) {
         Log.d(TAG, "Approval clarify: id=$approvalId")
-        cancelApprovalTimeout()
+        pendingApprovalId = approvalId
+        approvalExpiredAt = null
+        approvalRetryCount = 0
+        startApprovalTimeout()
         sttManager.stopListening()
         ttsManager.stop()
-        pendingApprovalId = approvalId
-        approvalRetryCount = 0
         transitionTo(SessionState.APPROVAL_WAITING)
         ttsManager.speakImmediate(message)
     }
@@ -173,9 +188,8 @@ class VoiceSessionManager @Inject constructor(
     private fun startApprovalListening() {
         Log.d(TAG, "Starting approval STT listening")
         ensureSttTokenBuffer()
-        // Start timeout
-        startApprovalTimeout()
-        // Start listening with longer silence timeout for approval
+        // Total approval timeout starts when the approval request is received.
+        // Here we only start listening after the prompt has finished.
         scope.launch {
             kotlinx.coroutines.delay(300)
             if (!waitForSttToken()) {
@@ -201,6 +215,7 @@ class VoiceSessionManager @Inject constructor(
         wsClient.sendApprovalReply(approvalId, text)
 
         pendingApprovalId = null
+        approvalExpiredAt = null
         approvalRetryCount = 0
 
         // Brief feedback and wait for server's response
@@ -213,14 +228,14 @@ class VoiceSessionManager @Inject constructor(
         approvalTimeoutJob = scope.launch {
             kotlinx.coroutines.delay(APPROVAL_TIMEOUT_MS)
             if (pendingApprovalId != null) {
-                Log.d(TAG, "Approval timeout, auto-deny")
-                sttManager.stopListening()
-                // Timeout — send /deny directly
-                wsClient.sendMessage("/deny")
-                pendingApprovalId = null
+                Log.d(TAG, "Approval timeout, returning to idle while keeping reply window: id=$pendingApprovalId")
+                approvalExpiredAt = System.currentTimeMillis()
                 approvalRetryCount = 0
-                ttsManager.speakImmediate("超时未回复，已自动拒绝")
-                transitionTo(SessionState.THINKING)
+                sttManager.stopListening()
+                ttsManager.stop()
+                transitionTo(SessionState.IDLE)
+                audioFocusManager.releaseFocus()
+                _error.tryEmit("审批等待已超时。你可以重新唤醒后说允许、拒绝或询问说明。")
             }
         }
     }
@@ -228,6 +243,16 @@ class VoiceSessionManager @Inject constructor(
     private fun cancelApprovalTimeout() {
         approvalTimeoutJob?.cancel()
         approvalTimeoutJob = null
+    }
+
+    private fun isExpiredApprovalReplyWindowActive(): Boolean {
+        val expiredAt = approvalExpiredAt ?: return false
+        val active = pendingApprovalId != null && System.currentTimeMillis() - expiredAt <= EXPIRED_APPROVAL_REPLY_WINDOW_MS
+        if (!active) {
+            pendingApprovalId = null
+            approvalExpiredAt = null
+        }
+        return active
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -239,8 +264,9 @@ class VoiceSessionManager @Inject constructor(
             sttManager.events.collect { event ->
                 when (event) {
                     is SttEvent.Result -> {
-                        if (_state.value == SessionState.APPROVAL_WAITING) {
-                            // In approval mode — persist the user's spoken reply, then send it for server-side LLM classification
+                        if (_state.value == SessionState.APPROVAL_WAITING || isExpiredApprovalReplyWindowActive()) {
+                            // In approval mode, or shortly after local approval timeout: send the spoken reply
+                            // for server-side LLM classification instead of treating it as a new task.
                             _transcript.tryEmit(event.text)
                             handleApprovalSttResult(event.text)
                         } else {
@@ -410,6 +436,10 @@ class VoiceSessionManager @Inject constructor(
         sttJob?.cancel()
         ttsJob?.cancel()
         wsJob?.cancel()
+        sttJob = null
+        ttsJob = null
+        wsJob = null
+        initialized = false
         sttManager.destroy()
         ttsManager.destroy()
     }
