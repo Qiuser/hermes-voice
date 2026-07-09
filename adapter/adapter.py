@@ -215,6 +215,8 @@ class VoiceAdapter(BasePlatformAdapter):
         self._pending_approvals: Dict[str, asyncio.Future] = {}
         # Pending user messages waiting for Hermes pairing approval: device_id -> text
         self._pending_pairing_messages: Dict[str, str] = {}
+        # Pending approval context: device_id -> {approval_id, command, description}
+        self._pending_approval_details: Dict[str, Dict[str, str]] = {}
 
     @staticmethod
     def _parse_allowed_devices(value: str) -> set:
@@ -556,6 +558,11 @@ class VoiceAdapter(BasePlatformAdapter):
         })
 
         approval_id = str(uuid.uuid4())
+        self._pending_approval_details[client.device_id] = {
+            "approval_id": approval_id,
+            "command": command[:500],
+            "description": description,
+        }
         ok = await client.send_json({
             "type": "approval_request",
             "approval_id": approval_id,
@@ -701,12 +708,40 @@ class VoiceAdapter(BasePlatformAdapter):
 
         logger.info("[Voice] Classified intent: %s", intent)
 
-        if intent == "always":
+        if intent == "clarify":
+            detail = self._pending_approval_details.get(client.device_id, {})
+            approval_id = detail.get("approval_id", "")
+            message = self._build_approval_clarification(
+                detail.get("command", ""),
+                detail.get("description", "dangerous command"),
+            )
+            await client.send_json({
+                "type": "approval_clarify",
+                "approval_id": approval_id,
+                "message": message,
+            })
+        elif intent == "always":
+            self._pending_approval_details.pop(client.device_id, None)
             await self._process_user_message(client, "/approve always")
         elif intent == "approve":
+            self._pending_approval_details.pop(client.device_id, None)
             await self._process_user_message(client, "/approve")
         else:
+            self._pending_approval_details.pop(client.device_id, None)
             await self._process_user_message(client, "/deny")
+
+    @staticmethod
+    def _build_approval_clarification(command: str, description: str) -> str:
+        cmd = (command or "").strip()
+        cmd_name = cmd.split()[0].split("/")[-1] if cmd else "命令"
+        short_desc = (description or "需要用户审批").strip()
+        if len(short_desc) > 90:
+            short_desc = short_desc[:90] + "..."
+        return (
+            f"这个审批请求要执行 {cmd_name} 命令。"
+            f"触发审批的原因是：{short_desc}。"
+            "完整命令已显示在屏幕上。如果允许请说允许，否则请说拒绝。"
+        )
 
     async def _resolve_approval_intent(self, user_text: str) -> str:
         """Use Hermes auxiliary LLM to classify approval intent.
@@ -734,18 +769,21 @@ class VoiceAdapter(BasePlatformAdapter):
                             "content": (
                                 "你是一个严格的三分类器，用于判断语音审批回复。\n"
                                 "场景：系统刚问用户：'是否允许执行该命令？'\n"
-                                "你的任务：根据用户原话分类，只能输出一个英文词：approve、deny、always。\n\n"
+                                "你的任务：根据用户原话分类，只能输出一个英文词：approve、deny、always、clarify。\n\n"
                                 "分类规则：\n"
                                 "- 用户表示同意/允许/可以/执行/确认/好的/行/嗯 => approve\n"
                                 "- 用户表示不同意/不允许/不要/取消/拒绝/不行/算了 => deny\n"
-                                "- 用户表示总是允许/以后都允许/一直允许 => always\n\n"
+                                "- 用户表示总是允许/以后都允许/一直允许 => always\n"
+                                "- 用户没有同意也没有拒绝，而是在询问用途/原因/风险/想先了解，例如'这是做什么'、'为什么要执行'、'等一下' => clarify\n\n"
                                 "示例：\n"
                                 "用户：允许。 输出：approve\n"
                                 "用户：可以。 输出：approve\n"
                                 "用户：执行吧。 输出：approve\n"
                                 "用户：不允许。 输出：deny\n"
                                 "用户：不要。 输出：deny\n"
-                                "用户：总是允许。 输出：always\n\n"
+                                "用户：总是允许。 输出：always\n"
+                                "用户：这是做什么？ 输出：clarify\n"
+                                "用户：等一下，为什么要执行？ 输出：clarify\n\n"
                                 "不要解释，不要加标点，不要输出其他内容。"
                             ),
                         },
@@ -760,9 +798,11 @@ class VoiceAdapter(BasePlatformAdapter):
             )
             result = response.choices[0].message.content.strip().lower()
             logger.info("[Voice] Approval intent raw LLM result: %r", result)
-            if result in ("approve", "deny", "always"):
+            if result in ("approve", "deny", "always", "clarify"):
                 return result
             # Fuzzy match only after logging raw output
+            if "clarify" in result:
+                return "clarify"
             if "always" in result:
                 return "always"
             if "approve" in result:

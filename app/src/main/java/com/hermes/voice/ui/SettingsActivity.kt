@@ -55,13 +55,22 @@ class SettingsActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
+            val connectionChanged = url != apiConfig.wsUrl ||
+                token != apiConfig.voiceToken ||
+                deviceId != apiConfig.deviceId
+
             apiConfig.wsUrl = url
             apiConfig.voiceToken = token
             apiConfig.deviceId = deviceId
             apiConfig.wakeWordEnabled = binding.switchWakeWord.isChecked
             apiConfig.autoContinueEnabled = binding.switchAutoContinue.isChecked
-            connectionManager.restart()
-            Toast.makeText(this, "配置已保存，正在重新连接", Toast.LENGTH_SHORT).show()
+
+            if (connectionChanged) {
+                connectionManager.restart()
+                Toast.makeText(this, "配置已保存，正在重新连接", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "设置已保存", Toast.LENGTH_SHORT).show()
+            }
             finish()
         }
     }

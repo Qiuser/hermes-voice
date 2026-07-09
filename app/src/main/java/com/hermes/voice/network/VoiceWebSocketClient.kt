@@ -173,6 +173,12 @@ class VoiceWebSocketClient @Inject constructor(
             "display" -> {
                 msg.content?.let { _events.tryEmit(WsEvent.Display(it)) }
             }
+            "approval_clarify" -> {
+                _events.tryEmit(WsEvent.ApprovalClarify(
+                    approvalId = msg.approvalId ?: "",
+                    message = msg.message ?: "这个命令需要审批。如果允许请说允许，否则请说拒绝。"
+                ))
+            }
             "pairing_required" -> {
                 _events.tryEmit(WsEvent.PairingRequired(
                     code = msg.code ?: "",
@@ -216,6 +222,7 @@ sealed class WsEvent {
     data class ToolStart(val name: String, val description: String) : WsEvent()
     data class ToolEnd(val name: String, val duration: Double) : WsEvent()
     data class ApprovalRequest(val approvalId: String, val command: String, val description: String) : WsEvent()
+    data class ApprovalClarify(val approvalId: String, val message: String) : WsEvent()
     data class TaskComplete(val task: String, val success: Boolean) : WsEvent()
     data class Busy(val message: String) : WsEvent()
     data class System(val content: String) : WsEvent()

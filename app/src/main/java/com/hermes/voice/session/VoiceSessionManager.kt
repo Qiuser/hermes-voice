@@ -126,6 +126,17 @@ class VoiceSessionManager @Inject constructor(
         // After TTS finishes, observeTts() will detect APPROVAL_WAITING and start STT
     }
 
+    private fun handleApprovalClarify(approvalId: String, message: String) {
+        Log.d(TAG, "Approval clarify: id=$approvalId")
+        cancelApprovalTimeout()
+        sttManager.stopListening()
+        ttsManager.stop()
+        pendingApprovalId = approvalId
+        approvalRetryCount = 0
+        transitionTo(SessionState.APPROVAL_WAITING)
+        ttsManager.speakImmediate(message)
+    }
+
     private fun buildApprovalPrompt(command: String, description: String): String {
         // 只提取命令名（第一个词），不读参数/URL，语音只播一句概括
         val cmdName = command.trimStart()
@@ -148,6 +159,8 @@ class VoiceSessionManager @Inject constructor(
         // Start listening with longer silence timeout for approval
         scope.launch {
             kotlinx.coroutines.delay(300)
+            ttsManager.playBeep(500, 100)
+            kotlinx.coroutines.delay(150)
             sttManager.startListening(silenceTimeoutSec = APPROVAL_SILENCE_TIMEOUT_SEC)
         }
     }
@@ -294,6 +307,9 @@ class VoiceSessionManager @Inject constructor(
                     }
                     is WsEvent.ApprovalRequest -> {
                         handleApprovalRequest(event.approvalId, event.command, event.description)
+                    }
+                    is WsEvent.ApprovalClarify -> {
+                        handleApprovalClarify(event.approvalId, event.message)
                     }
                     is WsEvent.PairingRequired -> {
                         handlePairingRequired(event.code, event.message)
