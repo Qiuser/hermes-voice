@@ -256,7 +256,7 @@
             android:layout_marginStart="10dp"
             android:gravity="center"
             android:text="发送"
-            android:textColor="@color/text_primary"
+            android:textColor="@color/background"
             android:textStyle="bold"
             android:textSize="14sp"
             android:background="@drawable/bg_send_button"

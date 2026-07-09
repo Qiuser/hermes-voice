@@ -106,10 +106,10 @@
                     app:hintEnabled="false"
                     app:boxBackgroundColor="@color/surface"
                     app:boxStrokeColor="@color/card_stroke"
-                    app:boxCornerRadiusTopStart="16dp"
-                    app:boxCornerRadiusTopEnd="16dp"
-                    app:boxCornerRadiusBottomStart="16dp"
-                    app:boxCornerRadiusBottomEnd="16dp"
+                    app:boxCornerRadiusTopStart="0dp"
+                    app:boxCornerRadiusTopEnd="0dp"
+                    app:boxCornerRadiusBottomStart="0dp"
+                    app:boxCornerRadiusBottomEnd="0dp"
                     style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
 
                     <com.google.android.material.textfield.TextInputEditText
@@ -142,10 +142,10 @@
                     app:boxStrokeColor="@color/card_stroke"
                     app:endIconMode="password_toggle"
                     app:endIconTint="@color/text_secondary"
-                    app:boxCornerRadiusTopStart="16dp"
-                    app:boxCornerRadiusTopEnd="16dp"
-                    app:boxCornerRadiusBottomStart="16dp"
-                    app:boxCornerRadiusBottomEnd="16dp"
+                    app:boxCornerRadiusTopStart="0dp"
+                    app:boxCornerRadiusTopEnd="0dp"
+                    app:boxCornerRadiusBottomStart="0dp"
+                    app:boxCornerRadiusBottomEnd="0dp"
                     style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
 
                     <com.google.android.material.textfield.TextInputEditText
@@ -176,10 +176,10 @@
                     app:hintEnabled="false"
                     app:boxBackgroundColor="@color/surface"
                     app:boxStrokeColor="@color/card_stroke"
-                    app:boxCornerRadiusTopStart="16dp"
-                    app:boxCornerRadiusTopEnd="16dp"
-                    app:boxCornerRadiusBottomStart="16dp"
-                    app:boxCornerRadiusBottomEnd="16dp"
+                    app:boxCornerRadiusTopStart="0dp"
+                    app:boxCornerRadiusTopEnd="0dp"
+                    app:boxCornerRadiusBottomStart="0dp"
+                    app:boxCornerRadiusBottomEnd="0dp"
                     style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
 
                     <com.google.android.material.textfield.TextInputEditText
@@ -211,11 +211,12 @@
                     android:textStyle="bold"
                     android:textColor="@color/primary" />
 
-                <com.google.android.material.switchmaterial.SwitchMaterial
+                <CheckBox
                     android:id="@+id/switchWakeWord"
                     android:layout_width="match_parent"
-                    android:layout_height="56dp"
+                    android:layout_height="48dp"
                     android:layout_marginTop="12dp"
+                    android:buttonTint="@color/accent"
                     android:text="语音唤醒（你好小马）"
                     android:textColor="@color/text_primary"
                     android:textSize="15sp" />
@@ -225,10 +226,11 @@
                     android:layout_height="1dp"
                     android:background="@color/divider" />
 
-                <com.google.android.material.switchmaterial.SwitchMaterial
+                <CheckBox
                     android:id="@+id/switchAutoContinue"
                     android:layout_width="match_parent"
-                    android:layout_height="56dp"
+                    android:layout_height="48dp"
+                    android:buttonTint="@color/accent"
                     android:text="自动连续对话"
                     android:textColor="@color/text_primary"
                     android:textSize="15sp" />
@@ -247,7 +249,7 @@
         android:text="保存设置"
         android:textSize="16sp"
         android:textStyle="bold"
-        android:textColor="@color/text_primary"
+        android:textColor="@color/background"
         android:background="@drawable/bg_send_button"
         android:clickable="true"
         android:focusable="true"
