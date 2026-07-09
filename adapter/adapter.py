@@ -711,7 +711,7 @@ class VoiceAdapter(BasePlatformAdapter):
         if intent == "clarify":
             detail = self._pending_approval_details.get(client.device_id, {})
             approval_id = detail.get("approval_id", "")
-            message = self._build_approval_clarification(
+            message = await self._build_approval_clarification(
                 detail.get("command", ""),
                 detail.get("description", "dangerous command"),
             )
@@ -730,17 +730,55 @@ class VoiceAdapter(BasePlatformAdapter):
             self._pending_approval_details.pop(client.device_id, None)
             await self._process_user_message(client, "/deny")
 
-    @staticmethod
-    def _build_approval_clarification(command: str, description: str) -> str:
+    async def _build_approval_clarification(self, command: str, description: str) -> str:
+        """Generate a short spoken explanation for a pending approval request."""
         cmd = (command or "").strip()
+        desc = (description or "需要用户审批").strip()
         cmd_name = cmd.split()[0].split("/")[-1] if cmd else "命令"
-        short_desc = (description or "需要用户审批").strip()
-        if len(short_desc) > 90:
-            short_desc = short_desc[:90] + "..."
+
+        try:
+            from agent.auxiliary_client import get_async_text_auxiliary_client
+            client, model = get_async_text_auxiliary_client(task="voice_approval_clarify")
+            if client:
+                try:
+                    response = await asyncio.wait_for(
+                        client.chat.completions.create(
+                            model=model,
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "你是语音助手的审批解释器。用户正在开车或没空看屏幕，"
+                                        "需要你用一句简短中文解释当前命令为什么要审批。\n"
+                                        "要求：\n"
+                                        "1. 不要朗读完整命令，不要读 URL 或参数。\n"
+                                        "2. 用口语解释它大概要做什么、可能的风险是什么。\n"
+                                        "3. 结尾提醒：如果允许请说允许，否则请说拒绝。\n"
+                                        "4. 总长度控制在 60 个汉字以内。"
+                                    ),
+                                },
+                                {
+                                    "role": "user",
+                                    "content": f"命令：{cmd}\n审批原因：{desc}",
+                                },
+                            ],
+                            max_tokens=160,
+                            temperature=0,
+                        ),
+                        timeout=8.0,
+                    )
+                    text = (response.choices[0].message.content or "").strip()
+                    if text:
+                        return text
+                finally:
+                    await client.close()
+        except Exception as e:
+            logger.warning("[Voice] Approval clarification LLM failed: %s", e)
+
+        # Safe fallback if auxiliary LLM is unavailable.
         return (
-            f"这个审批请求要执行 {cmd_name} 命令。"
-            f"触发审批的原因是：{short_desc}。"
-            "完整命令已显示在屏幕上。如果允许请说允许，否则请说拒绝。"
+            f"这个审批请求要执行 {cmd_name} 命令，原因是：{desc[:50]}。"
+            "如果允许请说允许，否则请说拒绝。"
         )
 
     async def _resolve_approval_intent(self, user_text: str) -> str:
