@@ -37,6 +37,7 @@ class SpeechRecognizerManager @Inject constructor(
     private var vad: Vad? = null
     private var audioRecord: AudioRecord? = null
     private var recordingJob: Job? = null
+    private val audioLock = Any()
     private val scope = CoroutineScope(Dispatchers.IO + Job())
 
     private val _events = MutableSharedFlow<SttEvent>(extraBufferCapacity = 16)
@@ -143,6 +144,11 @@ class SpeechRecognizerManager @Inject constructor(
             if (!isInitialized) return
         }
 
+        if (recordingJob?.isActive == true) {
+            Log.w(TAG, "startListening() ignored: recording already active")
+            return
+        }
+
         Log.d(TAG, "startListening(), online=${hasSttToken()}, silenceTimeout=${silenceTimeoutSec}s")
         _events.tryEmit(SttEvent.Ready)
 
@@ -212,8 +218,9 @@ class SpeechRecognizerManager @Inject constructor(
             val preBuffer = ArrayDeque<ShortArray>(preBufferFrames + 1)
 
             while (isActive && !hasError) {
-                val read = audioRecord?.read(buffer, 0, buffer.size) ?: break
-                if (read <= 0) continue
+                val read = readAudio(buffer, buffer.size)
+                if (read < 0) break
+                if (read == 0) continue
 
                 // VAD 检测
                 val samples = FloatArray(read) { buffer[it] / 32768.0f }
@@ -314,8 +321,9 @@ class SpeechRecognizerManager @Inject constructor(
             val preBuffer = ArrayDeque<FloatArray>(preBufferFrames + 1)
 
             while (isActive) {
-                val read = audioRecord?.read(buffer, 0, buffer.size) ?: break
-                if (read <= 0) continue
+                val read = readAudio(buffer, buffer.size)
+                if (read < 0) break
+                if (read == 0) continue
 
                 val samples = FloatArray(read) { buffer[it] / 32768.0f }
                 vad?.acceptWaveform(samples)
@@ -380,6 +388,18 @@ class SpeechRecognizerManager @Inject constructor(
         return result.text.trim()
     }
 
+    private fun readAudio(buffer: ShortArray, size: Int): Int {
+        return synchronized(audioLock) {
+            val record = audioRecord ?: return@synchronized -1
+            try {
+                record.read(buffer, 0, size)
+            } catch (e: Exception) {
+                Log.w(TAG, "AudioRecord read failed", e)
+                -1
+            }
+        }
+    }
+
     fun stopListening() {
         recordingJob?.cancel()
         recordingJob = null
@@ -387,13 +407,22 @@ class SpeechRecognizerManager @Inject constructor(
     }
 
     private fun stopRecording() {
-        try {
-            audioRecord?.stop()
-            audioRecord?.release()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error stopping recording", e)
+        synchronized(audioLock) {
+            val record = audioRecord ?: return
+            try {
+                if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    record.stop()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error stopping AudioRecord", e)
+            }
+            try {
+                record.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error releasing AudioRecord", e)
+            }
+            audioRecord = null
         }
-        audioRecord = null
     }
 
     fun destroy() {
