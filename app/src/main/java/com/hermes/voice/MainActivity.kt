@@ -140,7 +140,7 @@ class MainActivity : AppCompatActivity() {
             SessionState.IDLE -> {
                 stopMicPulse()
             }
-            SessionState.APPROVAL_WAITING -> {
+            SessionState.APPROVAL_WAITING, SessionState.PAIRING_WAITING -> {
                 startMicPulse(state, ringBackground = R.drawable.bg_mic_ring_amber, durationMs = 1800L)
             }
             SessionState.LISTENING -> {
@@ -235,6 +235,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 SessionState.APPROVAL_WAITING -> {
                     binding.tvStatus.text = "审批中... 请说允许或拒绝"
+                    binding.tvStatus.setTextColor(getColor(R.color.warning))
+                }
+                SessionState.PAIRING_WAITING -> {
+                    binding.tvStatus.text = "等待设备授权..."
                     binding.tvStatus.setTextColor(getColor(R.color.warning))
                 }
             }

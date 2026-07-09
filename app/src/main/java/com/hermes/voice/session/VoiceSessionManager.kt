@@ -32,6 +32,8 @@ class VoiceSessionManager @Inject constructor(
         private const val TAG = "VoiceSession"
         private const val APPROVAL_TIMEOUT_MS = 30_000L
         private const val APPROVAL_SILENCE_TIMEOUT_SEC = 10f
+        private const val PAIRING_POLL_INTERVAL_MS = 3_000L
+        private const val PAIRING_MAX_POLLS = 40
     }
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
@@ -60,6 +62,7 @@ class VoiceSessionManager @Inject constructor(
     private var pendingApprovalId: String? = null
     private var approvalRetryCount = 0
     private var approvalTimeoutJob: Job? = null
+    private var pairingPollJob: Job? = null
 
     fun initialize() {
         ttsManager.init()
@@ -88,6 +91,7 @@ class VoiceSessionManager @Inject constructor(
 
     fun stopSession() {
         cancelApprovalTimeout()
+        stopPairingPolling()
         pendingApprovalId = null
         sttManager.stopListening()
         ttsManager.stop()
@@ -290,6 +294,12 @@ class VoiceSessionManager @Inject constructor(
                     is WsEvent.ApprovalRequest -> {
                         handleApprovalRequest(event.approvalId, event.command, event.description)
                     }
+                    is WsEvent.PairingRequired -> {
+                        handlePairingRequired(event.code, event.message)
+                    }
+                    is WsEvent.PairingApproved -> {
+                        handlePairingApproved()
+                    }
                     is WsEvent.Busy -> {
                         ttsManager.speakImmediate(event.message)
                     }
@@ -303,6 +313,43 @@ class VoiceSessionManager @Inject constructor(
                 }
             }
         }
+    }
+
+    private fun handlePairingRequired(code: String, message: String) {
+        Log.d(TAG, "Pairing required: code=$code")
+        cancelApprovalTimeout()
+        pendingApprovalId = null
+        sttManager.stopListening()
+        ttsManager.stop()
+        transitionTo(SessionState.PAIRING_WAITING)
+        ttsManager.speakImmediate(message.ifBlank { "设备未授权，请在服务端批准配对" })
+        startPairingPolling()
+    }
+
+    private fun startPairingPolling() {
+        pairingPollJob?.cancel()
+        pairingPollJob = scope.launch {
+            repeat(PAIRING_MAX_POLLS) {
+                kotlinx.coroutines.delay(PAIRING_POLL_INTERVAL_MS)
+                wsClient.sendPairingStatus()
+            }
+            Log.d(TAG, "Pairing polling timed out")
+            transitionTo(SessionState.IDLE)
+            ttsManager.speakImmediate("等待授权超时，请重新发送消息")
+            audioFocusManager.releaseFocus()
+        }
+    }
+
+    private fun handlePairingApproved() {
+        Log.d(TAG, "Pairing approved")
+        stopPairingPolling()
+        transitionTo(SessionState.THINKING)
+        ttsManager.speakImmediate("授权成功，正在继续")
+    }
+
+    private fun stopPairingPolling() {
+        pairingPollJob?.cancel()
+        pairingPollJob = null
     }
 
     private fun transitionTo(newState: SessionState) {

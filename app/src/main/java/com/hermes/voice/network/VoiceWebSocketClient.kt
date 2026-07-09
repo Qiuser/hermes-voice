@@ -120,6 +120,12 @@ class VoiceWebSocketClient @Inject constructor(
         webSocket?.send(gson.toJson(msg))
     }
 
+    fun sendPairingStatus() {
+        if (!authenticated) return
+        val msg = PairingStatusMessage()
+        webSocket?.send(gson.toJson(msg))
+    }
+
     private fun handleMessage(text: String) {
         val msg = try {
             gson.fromJson(text, ServerMessage::class.java)
@@ -167,6 +173,18 @@ class VoiceWebSocketClient @Inject constructor(
             "display" -> {
                 msg.content?.let { _events.tryEmit(WsEvent.Display(it)) }
             }
+            "pairing_required" -> {
+                _events.tryEmit(WsEvent.PairingRequired(
+                    code = msg.code ?: "",
+                    message = msg.message ?: "设备未授权，请批准配对"
+                ))
+            }
+            "pairing_pending" -> {
+                _events.tryEmit(WsEvent.PairingPending)
+            }
+            "pairing_approved" -> {
+                _events.tryEmit(WsEvent.PairingApproved)
+            }
             "stt_token" -> {
                 if (!msg.url.isNullOrBlank()) {
                     _events.tryEmit(WsEvent.SttToken(
@@ -202,6 +220,9 @@ sealed class WsEvent {
     data class Busy(val message: String) : WsEvent()
     data class System(val content: String) : WsEvent()
     data class Display(val content: String) : WsEvent()
+    data class PairingRequired(val code: String, val message: String) : WsEvent()
+    data object PairingPending : WsEvent()
+    data object PairingApproved : WsEvent()
     data class SttToken(val provider: String, val url: String, val expiresIn: Int, val appId: String) : WsEvent()
     data class Error(val message: String) : WsEvent()
 }

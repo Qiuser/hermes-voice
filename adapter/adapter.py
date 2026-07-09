@@ -54,6 +54,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -212,6 +213,8 @@ class VoiceAdapter(BasePlatformAdapter):
         self._clients: Dict[str, VoiceClient] = {}
         # Pending approval responses: approval_id -> asyncio.Future
         self._pending_approvals: Dict[str, asyncio.Future] = {}
+        # Pending user messages waiting for Hermes pairing approval: device_id -> text
+        self._pending_pairing_messages: Dict[str, str] = {}
 
     @staticmethod
     def _parse_allowed_devices(value: str) -> set:
@@ -308,6 +311,22 @@ class VoiceAdapter(BasePlatformAdapter):
             return SendResult(success=True, message_id=str(uuid.uuid4()))
 
         is_agent_reply = bool((metadata or {}).get("notify"))
+
+        pairing_code = self._extract_pairing_code(content)
+        if pairing_code:
+            await client.send_json({
+                "type": "display",
+                "content": (
+                    f"设备未授权\n\n配对码: {pairing_code}\n"
+                    f"服务端执行: hermes pairing approve voice {pairing_code}"
+                ),
+            })
+            await client.send_json({
+                "type": "pairing_required",
+                "code": pairing_code,
+                "message": "设备未授权，请在服务端批准配对",
+            })
+            return SendResult(success=True, message_id=str(uuid.uuid4()))
 
         # Check if this content was already streamed via send_draft
         already_streamed = False
@@ -460,6 +479,8 @@ class VoiceAdapter(BasePlatformAdapter):
             text = data.get("text", "").strip()
             if not text:
                 return
+            if not text.startswith("/"):
+                self._pending_pairing_messages[client.device_id] = text
             await self._process_user_message(client, text)
 
         elif msg_type == "approval_response":
@@ -488,6 +509,9 @@ class VoiceAdapter(BasePlatformAdapter):
 
         elif msg_type == "request_stt_token":
             await self._handle_stt_token_request(client)
+
+        elif msg_type == "pairing_status":
+            await self._handle_pairing_status(client)
 
     async def _process_user_message(self, client: VoiceClient, text: str) -> None:
         if not text or not text.strip():
@@ -627,6 +651,40 @@ class VoiceAdapter(BasePlatformAdapter):
                 "url": "",
                 "error": str(e),
             })
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Pairing status + replay
+    # ──────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _extract_pairing_code(content: str) -> Optional[str]:
+        """Extract Hermes pairing code from gateway's unauthorized-user prompt."""
+        if "pairing code" not in content.lower() and "pairing approve" not in content.lower():
+            return None
+        match = re.search(r"hermes\s+pairing\s+approve\s+voice\s+([A-Z0-9]+)", content)
+        if match:
+            return match.group(1)
+        match = re.search(r"pairing code:\s*`?([A-Z0-9]{6,12})`?", content, re.I)
+        return match.group(1) if match else None
+
+    async def _handle_pairing_status(self, client: VoiceClient) -> None:
+        """Check whether the device has been approved and replay pending message."""
+        try:
+            from gateway.pairing import PairingStore
+            approved = PairingStore().is_approved("voice", client.device_id)
+        except Exception as e:
+            logger.warning("[Voice] Pairing status check failed: %s", e)
+            approved = False
+
+        if not approved:
+            await client.send_json({"type": "pairing_pending"})
+            return
+
+        await client.send_json({"type": "pairing_approved"})
+        pending = self._pending_pairing_messages.pop(client.device_id, "")
+        if pending:
+            logger.info("[Voice] Replaying pending message after pairing approval: device=%s", client.device_id)
+            await self._process_user_message(client, pending)
 
     # ──────────────────────────────────────────────────────────────────────
     # Approval intent classification (LLM-based)

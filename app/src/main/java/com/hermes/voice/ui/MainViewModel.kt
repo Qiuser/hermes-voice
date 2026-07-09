@@ -194,6 +194,14 @@ class MainViewModel @Inject constructor(
                     is WsEvent.ApprovalRequest -> {
                         // 详情已通过 display 消息展示，这里不重复
                     }
+                    is WsEvent.PairingRequired -> {
+                        appendWithTime("配对: ", "设备未授权，配对码 ${event.code}\n服务端执行：hermes pairing approve voice ${event.code}")
+                        _chatLog.postValue(chatLogBuilder.toString())
+                    }
+                    is WsEvent.PairingApproved -> {
+                        appendWithTime("配对: ", "授权成功，正在继续处理上一条消息")
+                        _chatLog.postValue(chatLogBuilder.toString())
+                    }
                     is WsEvent.Error -> {
                         if (waitingForTextResponse || inVoiceSession) {
                             appendWithTime("错误: ", event.message)
