@@ -732,14 +732,24 @@ class VoiceAdapter(BasePlatformAdapter):
                         {
                             "role": "system",
                             "content": (
-                                "你是一个意图分类器。用户被询问'是否允许执行某个命令'，"
-                                "你需要根据用户的回答判断意图。\n"
-                                "只回复一个词：approve（同意执行）、deny（拒绝执行）"
-                                "或 always（以后都允许）。\n"
-                                "不要回复其他任何内容。"
+                                "你是一个严格的三分类器，用于判断语音审批回复。\n"
+                                "场景：系统刚问用户：'是否允许执行该命令？'\n"
+                                "你的任务：根据用户原话分类，只能输出一个英文词：approve、deny、always。\n\n"
+                                "分类规则：\n"
+                                "- 用户表示同意/允许/可以/执行/确认/好的/行/嗯 => approve\n"
+                                "- 用户表示不同意/不允许/不要/取消/拒绝/不行/算了 => deny\n"
+                                "- 用户表示总是允许/以后都允许/一直允许 => always\n\n"
+                                "示例：\n"
+                                "用户：允许。 输出：approve\n"
+                                "用户：可以。 输出：approve\n"
+                                "用户：执行吧。 输出：approve\n"
+                                "用户：不允许。 输出：deny\n"
+                                "用户：不要。 输出：deny\n"
+                                "用户：总是允许。 输出：always\n\n"
+                                "不要解释，不要加标点，不要输出其他内容。"
                             ),
                         },
-                        {"role": "user", "content": user_text},
+                        {"role": "user", "content": f"用户原话：{user_text}\n输出："},
                     ],
                     max_tokens=5,
                     temperature=0,
@@ -747,10 +757,13 @@ class VoiceAdapter(BasePlatformAdapter):
                 timeout=8.0,
             )
             result = response.choices[0].message.content.strip().lower()
+            logger.info("[Voice] Approval intent raw LLM result: %r", result)
             if result in ("approve", "deny", "always"):
                 return result
-            # Fuzzy match
-            if "approve" in result or "always" in result:
+            # Fuzzy match only after logging raw output
+            if "always" in result:
+                return "always"
+            if "approve" in result:
                 return "approve"
             return "deny"
         except asyncio.TimeoutError:

@@ -202,7 +202,8 @@ class VoiceSessionManager @Inject constructor(
                 when (event) {
                     is SttEvent.Result -> {
                         if (_state.value == SessionState.APPROVAL_WAITING) {
-                            // In approval mode — interpret as approval response
+                            // In approval mode — persist the user's spoken reply, then send it for server-side LLM classification
+                            _transcript.tryEmit(event.text)
                             handleApprovalSttResult(event.text)
                         } else {
                             // Normal conversation
