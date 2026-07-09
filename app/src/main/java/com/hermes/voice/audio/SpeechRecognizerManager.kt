@@ -31,6 +31,8 @@ class SpeechRecognizerManager @Inject constructor(
         private const val TAG = "VoiceSTT"
         private const val SAMPLE_RATE = 16000
         private const val MODEL_DIR = "sherpa-onnx"
+        private const val MAX_STT_TOKEN_BUFFER = 2
+        private const val STT_TOKEN_TTL_MS = 4 * 60 * 1000L
     }
 
     private var recognizer: OfflineRecognizer? = null
@@ -45,32 +47,48 @@ class SpeechRecognizerManager @Inject constructor(
 
     private var isInitialized = false
 
-    // 讯飞在线 STT
-    private var xfyunUrl: String? = null
-    private var xfyunAppId: String? = null
-    private var tokenSetTime: Long = 0
-    private var tokenUsed: Boolean = false
+    // 讯飞在线 STT：签名 URL 是一次性 token，维护一个小队列做预取缓冲
+    private data class XfyunToken(
+        val url: String,
+        val appId: String,
+        val createdAt: Long = System.currentTimeMillis()
+    )
+
+    private val xfyunTokens = ArrayDeque<XfyunToken>()
 
     /**
-     * 设置讯飞在线 STT 凭据
+     * 设置讯飞在线 STT 凭据。每个 token 只能用一次，所以这里入队而不是覆盖。
      */
     fun setSttToken(url: String, appId: String) {
-        xfyunUrl = url
-        xfyunAppId = appId
-        tokenSetTime = System.currentTimeMillis()
-        tokenUsed = false
-        Log.d(TAG, "Xfyun STT token set, appId=$appId")
+        synchronized(xfyunTokens) {
+            purgeExpiredTokensLocked()
+            if (xfyunTokens.none { it.url == url }) {
+                xfyunTokens.addLast(XfyunToken(url, appId))
+            }
+            while (xfyunTokens.size > MAX_STT_TOKEN_BUFFER) {
+                xfyunTokens.removeFirst()
+            }
+            Log.d(TAG, "Xfyun STT token queued, count=${xfyunTokens.size}, appId=$appId")
+        }
     }
 
-    fun hasSttToken(): Boolean {
-        if (xfyunUrl.isNullOrBlank()) return false
-        if (tokenUsed) return false
-        val elapsed = System.currentTimeMillis() - tokenSetTime
-        if (elapsed > 4 * 60 * 1000) {
-            Log.d(TAG, "STT token expired")
-            return false
+    fun hasSttToken(): Boolean = availableSttTokenCount() > 0
+
+    fun availableSttTokenCount(): Int = synchronized(xfyunTokens) {
+        purgeExpiredTokensLocked()
+        xfyunTokens.size
+    }
+
+    private fun consumeSttToken(): XfyunToken? = synchronized(xfyunTokens) {
+        purgeExpiredTokensLocked()
+        xfyunTokens.removeFirstOrNull()
+    }
+
+    private fun purgeExpiredTokensLocked() {
+        val now = System.currentTimeMillis()
+        while (xfyunTokens.isNotEmpty() && now - xfyunTokens.first().createdAt > STT_TOKEN_TTL_MS) {
+            xfyunTokens.removeFirst()
         }
-        return true
     }
 
     fun initialize() {
@@ -165,9 +183,9 @@ class SpeechRecognizerManager @Inject constructor(
     // ========== 在线模式（讯飞）==========
 
     private fun startOnlineRecognition(silenceTimeoutSec: Float) {
-        val url = xfyunUrl ?: return
-        val appId = xfyunAppId ?: return
-        tokenUsed = true // 标记已使用，下次需要新 token
+        val token = consumeSttToken() ?: return
+        val url = token.url
+        val appId = token.appId
 
         val bufferSize = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT

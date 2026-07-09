@@ -34,6 +34,7 @@ class VoiceSessionManager @Inject constructor(
         private const val APPROVAL_SILENCE_TIMEOUT_SEC = 10f
         private const val PAIRING_POLL_INTERVAL_MS = 3_000L
         private const val PAIRING_MAX_POLLS = 40
+        private const val DESIRED_STT_TOKEN_BUFFER = 2
     }
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
@@ -72,20 +73,40 @@ class VoiceSessionManager @Inject constructor(
         observeWs()
     }
 
+    private fun ensureSttTokenBuffer() {
+        val missing = DESIRED_STT_TOKEN_BUFFER - sttManager.availableSttTokenCount()
+        repeat(missing.coerceAtLeast(0)) {
+            wsClient.requestSttToken()
+        }
+    }
+
+    private suspend fun waitForSttToken(maxWaitMs: Long = 2500L): Boolean {
+        var waited = 0L
+        while (!sttManager.hasSttToken() && waited < maxWaitMs) {
+            wsClient.requestSttToken()
+            kotlinx.coroutines.delay(150)
+            waited += 150
+        }
+        return sttManager.hasSttToken()
+    }
+
     fun startSession() {
         if (_state.value != SessionState.IDLE) return
         audioFocusManager.requestFocus()
         transitionTo(SessionState.LISTENING)
 
-        // 如果没有可用 token，先请求再等
-        if (!sttManager.hasSttToken()) {
-            wsClient.requestSttToken()
-        }
+        ensureSttTokenBuffer()
 
         // 延迟 500ms 再开始录音（给 token 请求留时间，也给"嗯"播完留时间）
         scope.launch {
             kotlinx.coroutines.delay(500)
-            sttManager.startListening()
+            if (waitForSttToken()) {
+                sttManager.startListening()
+                ensureSttTokenBuffer()
+            } else {
+                _error.tryEmit("语音识别凭据获取失败")
+                stopSession()
+            }
         }
     }
 
@@ -109,6 +130,7 @@ class VoiceSessionManager @Inject constructor(
         // Save approval state
         pendingApprovalId = approvalId
         approvalRetryCount = 0
+        ensureSttTokenBuffer() // 讯飞 token 一次性使用，审批回复需要提前预取
 
         // Interrupt whatever is happening
         val currentState = _state.value
@@ -150,18 +172,21 @@ class VoiceSessionManager @Inject constructor(
 
     private fun startApprovalListening() {
         Log.d(TAG, "Starting approval STT listening")
-        // Request fresh STT token if needed
-        if (!sttManager.hasSttToken()) {
-            wsClient.requestSttToken()
-        }
+        ensureSttTokenBuffer()
         // Start timeout
         startApprovalTimeout()
         // Start listening with longer silence timeout for approval
         scope.launch {
             kotlinx.coroutines.delay(300)
+            if (!waitForSttToken()) {
+                Log.e(TAG, "No STT token available for approval response")
+                _error.tryEmit("语音识别凭据获取失败")
+                return@launch
+            }
             ttsManager.playBeep(500, 100)
             kotlinx.coroutines.delay(150)
             sttManager.startListening(silenceTimeoutSec = APPROVAL_SILENCE_TIMEOUT_SEC)
+            ensureSttTokenBuffer()
         }
     }
 
@@ -227,7 +252,7 @@ class VoiceSessionManager @Inject constructor(
                             // 提示音：消息已发送
                             ttsManager.playBeep(500, 100)
                             // 预请求下一个 STT token（讯飞签名 URL 是一次性的）
-                            wsClient.requestSttToken()
+                            ensureSttTokenBuffer()
                         }
                     }
                     is SttEvent.PartialResult -> {
@@ -265,7 +290,13 @@ class VoiceSessionManager @Inject constructor(
                                 ttsManager.playBeep(500, 100)
                                 kotlinx.coroutines.delay(150)
                                 transitionTo(SessionState.LISTENING)
-                                sttManager.startListening()
+                                if (waitForSttToken()) {
+                                    sttManager.startListening()
+                                    ensureSttTokenBuffer()
+                                } else {
+                                    _error.tryEmit("语音识别凭据获取失败")
+                                    stopSession()
+                                }
                             } else {
                                 // 不自动继续，回到待命
                                 transitionTo(SessionState.IDLE)
@@ -288,12 +319,13 @@ class VoiceSessionManager @Inject constructor(
             wsClient.events.collect { event ->
                 when (event) {
                     is WsEvent.Connected -> {
-                        // 连接成功后请求 STT 凭据（预备第一次使用）
-                        wsClient.requestSttToken()
+                        // 连接成功后预取 STT 凭据，保持一个备用 token
+                        ensureSttTokenBuffer()
                     }
                     is WsEvent.SttToken -> {
-                        // 收到讯飞凭据，设置给 STT 管理器
+                        // 收到讯飞凭据，入队缓存；低于目标缓冲则继续预取
                         sttManager.setSttToken(event.url, event.appId)
+                        ensureSttTokenBuffer()
                     }
                     is WsEvent.Delta -> {
                         if (_state.value == SessionState.THINKING) {
