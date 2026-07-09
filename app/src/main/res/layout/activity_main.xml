@@ -127,7 +127,7 @@
                 android:layout_width="154dp"
                 android:layout_height="154dp"
                 android:layout_gravity="center"
-                android:src="@drawable/mic_icon_premium"
+                android:src="@drawable/ic_mic_terminal"
                 android:scaleType="fitCenter"
                 android:contentDescription="语音对话"
                 android:clickable="true"

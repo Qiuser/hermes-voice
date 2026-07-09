@@ -135,7 +135,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateMicVisual(state: SessionState) {
-        binding.btnStartSession.setImageResource(R.drawable.mic_icon_premium)
+        binding.btnStartSession.setImageResource(R.drawable.ic_mic_terminal)
         when (state) {
             SessionState.IDLE -> {
                 stopMicPulse()
