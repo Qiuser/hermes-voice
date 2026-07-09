@@ -54,8 +54,10 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 try:
@@ -91,7 +93,10 @@ VOICE_PLATFORM_HINT = (
     "send the full report to Feishu via send_to_feishu, "
     "verbally only say the outcome: e.g. deploy succeeded, or deploy failed. "
     "5) NEVER read out deployment logs, build output, or technical details verbally. "
-    "6) Confirmations: one sentence max. e.g. OK started, or done successfully."
+    "6) Confirmations: one sentence max. e.g. OK started, or done successfully. "
+    "7) Command approvals are handled directly via voice (user says allow/deny). "
+    "Do NOT mention Feishu or any other platform in approval-related replies. "
+    "After approval, just state the result briefly."
 )
 
 
@@ -209,6 +214,10 @@ class VoiceAdapter(BasePlatformAdapter):
         self._clients: Dict[str, VoiceClient] = {}
         # Pending approval responses: approval_id -> asyncio.Future
         self._pending_approvals: Dict[str, asyncio.Future] = {}
+        # Pending user messages waiting for Hermes pairing approval: device_id -> text
+        self._pending_pairing_messages: Dict[str, str] = {}
+        # Pending approval context: device_id -> {approval_id, command, description}
+        self._pending_approval_details: Dict[str, Dict[str, str]] = {}
 
     @staticmethod
     def _parse_allowed_devices(value: str) -> set:
@@ -305,6 +314,22 @@ class VoiceAdapter(BasePlatformAdapter):
             return SendResult(success=True, message_id=str(uuid.uuid4()))
 
         is_agent_reply = bool((metadata or {}).get("notify"))
+
+        pairing_code = self._extract_pairing_code(content)
+        if pairing_code:
+            await client.send_json({
+                "type": "display",
+                "content": (
+                    f"设备未授权\n\n配对码: {pairing_code}\n"
+                    f"服务端执行: hermes pairing approve voice {pairing_code}"
+                ),
+            })
+            await client.send_json({
+                "type": "pairing_required",
+                "code": pairing_code,
+                "message": "设备未授权，请在服务端批准配对",
+            })
+            return SendResult(success=True, message_id=str(uuid.uuid4()))
 
         # Check if this content was already streamed via send_draft
         already_streamed = False
@@ -457,6 +482,8 @@ class VoiceAdapter(BasePlatformAdapter):
             text = data.get("text", "").strip()
             if not text:
                 return
+            if not text.startswith("/"):
+                self._pending_pairing_messages[client.device_id] = text
             await self._process_user_message(client, text)
 
         elif msg_type == "approval_response":
@@ -466,6 +493,12 @@ class VoiceAdapter(BasePlatformAdapter):
                 future = self._pending_approvals.pop(approval_id)
                 if not future.done():
                     future.set_result(choice)
+
+        elif msg_type == "approval_reply":
+            # User's raw voice text for approval — classify intent via LLM
+            user_text = data.get("text", "").strip()
+            if user_text:
+                await self._handle_approval_reply(client, user_text)
 
         elif msg_type == "command":
             cmd = data.get("cmd", "")
@@ -480,10 +513,24 @@ class VoiceAdapter(BasePlatformAdapter):
         elif msg_type == "request_stt_token":
             await self._handle_stt_token_request(client)
 
+        elif msg_type == "pairing_status":
+            await self._handle_pairing_status(client)
+
     async def _process_user_message(self, client: VoiceClient, text: str) -> None:
         if not text or not text.strip():
             return
         """Route user message through the gateway message pipeline."""
+        text = text.strip()
+        if not text.startswith("/") and not self._has_active_voice_context(client.device_id):
+            if await self._requires_missing_context_clarification(text):
+                logger.info(
+                    "[Voice] Clarifying context-dependent utterance without active context: device=%s text=%r",
+                    client.device_id,
+                    text,
+                )
+                await self._send_missing_context_clarification(client, text)
+                return
+
         source = self.build_source(
             chat_id=client.device_id,
             chat_name=f"Voice:{client.device_id}",
@@ -516,7 +563,18 @@ class VoiceAdapter(BasePlatformAdapter):
         if not client:
             return SendResult(success=False, error="Device not connected")
 
+        # Push full command details as display-only (shown on screen, not spoken)
+        await client.send_json({
+            "type": "display",
+            "content": f"⚠️ 审批请求\n命令: {command[:500]}\n原因: {description}",
+        })
+
         approval_id = str(uuid.uuid4())
+        self._pending_approval_details[client.device_id] = {
+            "approval_id": approval_id,
+            "command": command[:500],
+            "description": description,
+        }
         ok = await client.send_json({
             "type": "approval_request",
             "approval_id": approval_id,
@@ -527,6 +585,104 @@ class VoiceAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Send failed")
 
         return SendResult(success=True, message_id=approval_id)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Missing-context guard
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _has_active_voice_context(self, device_id: str) -> bool:
+        """Return True when the voice route already has live conversation context."""
+        try:
+            sessions_path = Path.home() / ".hermes" / "sessions" / "sessions.json"
+            data = json.loads(sessions_path.read_text())
+            entry = data.get(f"agent:main:voice:dm:{device_id}") or {}
+            session_id = str(entry.get("session_id") or "")
+            if not session_id:
+                return False
+            if entry.get("expiry_finalized") or entry.get("suspended") or entry.get("resume_pending"):
+                return False
+            if entry.get("is_fresh_reset") or entry.get("was_auto_reset"):
+                return False
+            return bool(entry.get("reset_had_activity") or entry.get("updated_at"))
+        except Exception as e:
+            logger.warning("[Voice] Failed to check active voice context: %s", e)
+            # Fail closed: if we cannot prove context exists, ask for clarification.
+            return False
+
+    async def _requires_missing_context_clarification(self, text: str) -> bool:
+        """Use a small LLM classifier to decide whether an utterance needs prior context."""
+        fallback = self._requires_missing_context_clarification_fallback(text)
+        try:
+            from agent.auxiliary_client import get_async_text_auxiliary_client
+        except ImportError:
+            return fallback
+
+        aux_client, model = get_async_text_auxiliary_client(task="voice_missing_context_guard")
+        if not aux_client:
+            return fallback
+
+        try:
+            response = await asyncio.wait_for(
+                aux_client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "你是语音助手的安全分类器。当前语音会话没有可用前文。\n"
+                                "判断用户这句话在没有上下文时能否安全、明确地执行。\n"
+                                "只输出一个英文词：standalone 或 dependent。\n\n"
+                                "输出 dependent：这句话依赖前文、指代不明、对象/动作/数量不完整，"
+                                "或如果直接执行可能触发部署、远程命令、审批、删除、停止等副作用但目标不明确。\n"
+                                "输出 standalone：这句话本身已经完整说明了要做什么、对象是什么，"
+                                "即使没有前文也能安全理解；普通问候或闲聊也算 standalone。\n\n"
+                                "例子：\n"
+                                "再发三个 => dependent\n继续 => dependent\n按刚才那个执行 => dependent\n这个秘密是干嘛的 => dependent\n全部停掉 => dependent\n部署 envo-admin-service 到测试环境 => standalone\n今天北京天气怎么样 => standalone\n你好 => standalone\n"
+                                "不要解释，不要加标点。"
+                            ),
+                        },
+                        {"role": "user", "content": f"用户原话：{text}\n输出："},
+                    ],
+                    max_tokens=32,
+                    temperature=0,
+                ),
+                timeout=6.0,
+            )
+            result = (response.choices[0].message.content or "").strip().lower()
+            logger.info("[Voice] Missing-context guard raw LLM result: %r", result)
+            if "dependent" in result:
+                return True
+            if "standalone" in result:
+                return False
+            return fallback
+        except asyncio.TimeoutError:
+            logger.warning("[Voice] Missing-context guard LLM timed out")
+            return fallback
+        except Exception as e:
+            logger.warning("[Voice] Missing-context guard LLM error: %s", e)
+            return fallback
+        finally:
+            await aux_client.close()
+
+    @staticmethod
+    def _requires_missing_context_clarification_fallback(text: str) -> bool:
+        """Conservative fallback when the LLM classifier is unavailable."""
+        normalized = re.sub(r"\s+", "", text.strip().lower())
+        if not normalized:
+            return False
+        ambiguous_markers = (
+            "继续", "再", "刚才", "上面", "前面", "那个", "这个", "它", "他们", "这些", "那些",
+            "照旧", "一样", "按原", "按之前", "执行吧", "发几个", "发三个", "停掉", "取消掉",
+        )
+        if any(marker in normalized for marker in ambiguous_markers):
+            return True
+        return len(normalized) <= 8 and not re.search(r"[a-z0-9]\w{2,}", normalized)
+
+    async def _send_missing_context_clarification(self, client: VoiceClient, text: str) -> None:
+        message = "当前语音会话没有前文，我不确定你指的是什么。请完整说一遍要执行的任务。"
+        await client.send_json({"type": "display", "content": f"需要澄清: {text}\n{message}"})
+        await client.send_json({"type": "delta", "content": message})
+        await client.send_json({"type": "end", "finish_reason": "clarify"})
 
     # ──────────────────────────────────────────────────────────────────────
     # Utility
@@ -612,6 +768,202 @@ class VoiceAdapter(BasePlatformAdapter):
                 "url": "",
                 "error": str(e),
             })
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Pairing status + replay
+    # ──────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _extract_pairing_code(content: str) -> Optional[str]:
+        """Extract Hermes pairing code from gateway's unauthorized-user prompt."""
+        if "pairing code" not in content.lower() and "pairing approve" not in content.lower():
+            return None
+        match = re.search(r"hermes\s+pairing\s+approve\s+voice\s+([A-Z0-9]+)", content)
+        if match:
+            return match.group(1)
+        match = re.search(r"pairing code:\s*`?([A-Z0-9]{6,12})`?", content, re.I)
+        return match.group(1) if match else None
+
+    async def _handle_pairing_status(self, client: VoiceClient) -> None:
+        """Check whether the device has been approved and replay pending message."""
+        try:
+            from gateway.pairing import PairingStore
+            approved = PairingStore().is_approved("voice", client.device_id)
+        except Exception as e:
+            logger.warning("[Voice] Pairing status check failed: %s", e)
+            approved = False
+
+        if not approved:
+            await client.send_json({"type": "pairing_pending"})
+            return
+
+        await client.send_json({"type": "pairing_approved"})
+        pending = self._pending_pairing_messages.pop(client.device_id, "")
+        if pending:
+            logger.info("[Voice] Replaying pending message after pairing approval: device=%s", client.device_id)
+            await self._process_user_message(client, pending)
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Approval intent classification (LLM-based)
+    # ──────────────────────────────────────────────────────────────────────
+
+    async def _handle_approval_reply(self, client: VoiceClient, user_text: str) -> None:
+        """Classify user's voice reply and inject /approve or /deny command."""
+        logger.info("[Voice] Approval reply from %s: '%s'", client.device_id, user_text)
+        try:
+            intent = await self._resolve_approval_intent(user_text)
+        except Exception as e:
+            logger.warning("[Voice] Approval intent classification failed: %s", e)
+            intent = "deny"
+
+        logger.info("[Voice] Classified intent: %s", intent)
+
+        if intent == "clarify":
+            detail = self._pending_approval_details.get(client.device_id, {})
+            approval_id = detail.get("approval_id", "")
+            message = await self._build_approval_clarification(
+                detail.get("command", ""),
+                detail.get("description", "dangerous command"),
+            )
+            await client.send_json({
+                "type": "approval_clarify",
+                "approval_id": approval_id,
+                "message": message,
+            })
+        elif intent == "always":
+            self._pending_approval_details.pop(client.device_id, None)
+            await self._process_user_message(client, "/approve always")
+        elif intent == "approve":
+            self._pending_approval_details.pop(client.device_id, None)
+            await self._process_user_message(client, "/approve")
+        else:
+            self._pending_approval_details.pop(client.device_id, None)
+            await self._process_user_message(client, "/deny")
+
+    async def _build_approval_clarification(self, command: str, description: str) -> str:
+        """Generate a short spoken explanation for a pending approval request."""
+        cmd = (command or "").strip()
+        desc = (description or "需要用户审批").strip()
+        cmd_name = cmd.split()[0].split("/")[-1] if cmd else "命令"
+
+        try:
+            from agent.auxiliary_client import get_async_text_auxiliary_client
+            client, model = get_async_text_auxiliary_client(task="voice_approval_clarify")
+            if client:
+                try:
+                    response = await asyncio.wait_for(
+                        client.chat.completions.create(
+                            model=model,
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "你是语音助手的审批解释器。用户正在开车或没空看屏幕，"
+                                        "需要你用一句简短中文解释当前命令为什么要审批。\n"
+                                        "要求：\n"
+                                        "1. 不要朗读完整命令，不要读 URL 或参数。\n"
+                                        "2. 用口语解释它大概要做什么、可能的风险是什么。\n"
+                                        "3. 结尾提醒：如果允许请说允许，否则请说拒绝。\n"
+                                        "4. 总长度控制在 60 个汉字以内。"
+                                    ),
+                                },
+                                {
+                                    "role": "user",
+                                    "content": f"命令：{cmd}\n审批原因：{desc}",
+                                },
+                            ],
+                            max_tokens=160,
+                            temperature=0,
+                        ),
+                        timeout=8.0,
+                    )
+                    text = (response.choices[0].message.content or "").strip()
+                    if text:
+                        return text
+                finally:
+                    await client.close()
+        except Exception as e:
+            logger.warning("[Voice] Approval clarification LLM failed: %s", e)
+
+        # Safe fallback if auxiliary LLM is unavailable.
+        return (
+            f"这个审批请求要执行 {cmd_name} 命令，原因是：{desc[:50]}。"
+            "如果允许请说允许，否则请说拒绝。"
+        )
+
+    async def _resolve_approval_intent(self, user_text: str) -> str:
+        """Use Hermes auxiliary LLM to classify approval intent.
+
+        Returns: 'approve', 'deny', or 'always'.
+        """
+        try:
+            from agent.auxiliary_client import get_async_text_auxiliary_client
+        except ImportError:
+            logger.warning("[Voice] Cannot import auxiliary_client, falling back to deny")
+            return "deny"
+
+        client, model = get_async_text_auxiliary_client(task="voice_approval")
+        if not client:
+            logger.warning("[Voice] No auxiliary client available, falling back to deny")
+            return "deny"
+
+        try:
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "你是一个严格的三分类器，用于判断语音审批回复。\n"
+                                "场景：系统刚问用户：'是否允许执行该命令？'\n"
+                                "你的任务：根据用户原话分类，只能输出一个英文词：approve、deny、always、clarify。\n\n"
+                                "分类规则：\n"
+                                "- 用户表示同意/允许/可以/执行/确认/好的/行/嗯 => approve\n"
+                                "- 用户表示不同意/不允许/不要/取消/拒绝/不行/算了 => deny\n"
+                                "- 用户表示总是允许/以后都允许/一直允许 => always\n"
+                                "- 用户没有同意也没有拒绝，而是在询问用途/原因/风险/想先了解，例如'这是做什么'、'为什么要执行'、'等一下' => clarify\n\n"
+                                "示例：\n"
+                                "用户：允许。 输出：approve\n"
+                                "用户：可以。 输出：approve\n"
+                                "用户：执行吧。 输出：approve\n"
+                                "用户：不允许。 输出：deny\n"
+                                "用户：不要。 输出：deny\n"
+                                "用户：总是允许。 输出：always\n"
+                                "用户：这是做什么？ 输出：clarify\n"
+                                "用户：等一下，为什么要执行？ 输出：clarify\n\n"
+                                "不要解释，不要加标点，不要输出其他内容。"
+                            ),
+                        },
+                        {"role": "user", "content": f"用户原话：{user_text}\n输出："},
+                    ],
+                    # DeepSeek reasoner spends part of max_tokens on reasoning_content;
+                    # keep enough room for the final one-word answer.
+                    max_tokens=64,
+                    temperature=0,
+                ),
+                timeout=8.0,
+            )
+            result = response.choices[0].message.content.strip().lower()
+            logger.info("[Voice] Approval intent raw LLM result: %r", result)
+            if result in ("approve", "deny", "always", "clarify"):
+                return result
+            # Fuzzy match only after logging raw output
+            if "clarify" in result:
+                return "clarify"
+            if "always" in result:
+                return "always"
+            if "approve" in result:
+                return "approve"
+            return "deny"
+        except asyncio.TimeoutError:
+            logger.warning("[Voice] Approval intent LLM timed out")
+            return "deny"
+        except Exception as e:
+            logger.warning("[Voice] Approval intent LLM error: %s", e)
+            return "deny"
+        finally:
+            await client.close()
 
     async def _heartbeat_loop(self, interval: float = 25.0) -> None:
         """Send periodic ping to all connected clients."""

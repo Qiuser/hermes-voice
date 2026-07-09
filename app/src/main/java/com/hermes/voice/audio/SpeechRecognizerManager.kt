@@ -31,12 +31,15 @@ class SpeechRecognizerManager @Inject constructor(
         private const val TAG = "VoiceSTT"
         private const val SAMPLE_RATE = 16000
         private const val MODEL_DIR = "sherpa-onnx"
+        private const val MAX_STT_TOKEN_BUFFER = 2
+        private const val STT_TOKEN_TTL_MS = 4 * 60 * 1000L
     }
 
     private var recognizer: OfflineRecognizer? = null
     private var vad: Vad? = null
     private var audioRecord: AudioRecord? = null
     private var recordingJob: Job? = null
+    private val audioLock = Any()
     private val scope = CoroutineScope(Dispatchers.IO + Job())
 
     private val _events = MutableSharedFlow<SttEvent>(extraBufferCapacity = 16)
@@ -44,32 +47,48 @@ class SpeechRecognizerManager @Inject constructor(
 
     private var isInitialized = false
 
-    // 讯飞在线 STT
-    private var xfyunUrl: String? = null
-    private var xfyunAppId: String? = null
-    private var tokenSetTime: Long = 0
-    private var tokenUsed: Boolean = false
+    // 讯飞在线 STT：签名 URL 是一次性 token，维护一个小队列做预取缓冲
+    private data class XfyunToken(
+        val url: String,
+        val appId: String,
+        val createdAt: Long = System.currentTimeMillis()
+    )
+
+    private val xfyunTokens = ArrayDeque<XfyunToken>()
 
     /**
-     * 设置讯飞在线 STT 凭据
+     * 设置讯飞在线 STT 凭据。每个 token 只能用一次，所以这里入队而不是覆盖。
      */
     fun setSttToken(url: String, appId: String) {
-        xfyunUrl = url
-        xfyunAppId = appId
-        tokenSetTime = System.currentTimeMillis()
-        tokenUsed = false
-        Log.d(TAG, "Xfyun STT token set, appId=$appId")
+        synchronized(xfyunTokens) {
+            purgeExpiredTokensLocked()
+            if (xfyunTokens.none { it.url == url }) {
+                xfyunTokens.addLast(XfyunToken(url, appId))
+            }
+            while (xfyunTokens.size > MAX_STT_TOKEN_BUFFER) {
+                xfyunTokens.removeFirst()
+            }
+            Log.d(TAG, "Xfyun STT token queued, count=${xfyunTokens.size}, appId=$appId")
+        }
     }
 
-    fun hasSttToken(): Boolean {
-        if (xfyunUrl.isNullOrBlank()) return false
-        if (tokenUsed) return false
-        val elapsed = System.currentTimeMillis() - tokenSetTime
-        if (elapsed > 4 * 60 * 1000) {
-            Log.d(TAG, "STT token expired")
-            return false
+    fun hasSttToken(): Boolean = availableSttTokenCount() > 0
+
+    fun availableSttTokenCount(): Int = synchronized(xfyunTokens) {
+        purgeExpiredTokensLocked()
+        xfyunTokens.size
+    }
+
+    private fun consumeSttToken(): XfyunToken? = synchronized(xfyunTokens) {
+        purgeExpiredTokensLocked()
+        xfyunTokens.removeFirstOrNull()
+    }
+
+    private fun purgeExpiredTokensLocked() {
+        val now = System.currentTimeMillis()
+        while (xfyunTokens.isNotEmpty() && now - xfyunTokens.first().createdAt > STT_TOKEN_TTL_MS) {
+            xfyunTokens.removeFirst()
         }
-        return true
     }
 
     fun initialize() {
@@ -137,19 +156,24 @@ class SpeechRecognizerManager @Inject constructor(
         )
     }
 
-    fun startListening() {
+    fun startListening(silenceTimeoutSec: Float = 5f) {
         if (!isInitialized) {
             initialize()
             if (!isInitialized) return
         }
 
-        Log.d(TAG, "startListening(), online=${hasSttToken()}")
+        if (recordingJob?.isActive == true) {
+            Log.w(TAG, "startListening() ignored: recording already active")
+            return
+        }
+
+        Log.d(TAG, "startListening(), online=${hasSttToken()}, silenceTimeout=${silenceTimeoutSec}s")
         _events.tryEmit(SttEvent.Ready)
 
         if (hasSttToken()) {
-            startOnlineRecognition()
+            startOnlineRecognition(silenceTimeoutSec)
         } else if (recognizer != null) {
-            startOfflineRecognition()
+            startOfflineRecognition(silenceTimeoutSec)
         } else {
             Log.e(TAG, "No STT available (no token + no offline model)")
             _events.tryEmit(SttEvent.Error(-1, "语音识别不可用，请检查网络连接"))
@@ -158,10 +182,10 @@ class SpeechRecognizerManager @Inject constructor(
 
     // ========== 在线模式（讯飞）==========
 
-    private fun startOnlineRecognition() {
-        val url = xfyunUrl ?: return
-        val appId = xfyunAppId ?: return
-        tokenUsed = true // 标记已使用，下次需要新 token
+    private fun startOnlineRecognition(silenceTimeoutSec: Float) {
+        val token = consumeSttToken() ?: return
+        val url = token.url
+        val appId = token.appId
 
         val bufferSize = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
@@ -205,15 +229,16 @@ class SpeechRecognizerManager @Inject constructor(
             val buffer = ShortArray(640) // 40ms @16kHz
             var speechDetected = false
             var silenceFrames = 0
-            val maxSilenceFrames = (SAMPLE_RATE * 5) / 640 // 5秒无声超时
+            val maxSilenceFrames = (SAMPLE_RATE * silenceTimeoutSec).toInt() / 640
 
             // 预缓冲
             val preBufferFrames = (SAMPLE_RATE * 1.0f).toInt() / 640 + 1
             val preBuffer = ArrayDeque<ShortArray>(preBufferFrames + 1)
 
             while (isActive && !hasError) {
-                val read = audioRecord?.read(buffer, 0, buffer.size) ?: break
-                if (read <= 0) continue
+                val read = readAudio(buffer, buffer.size)
+                if (read < 0) break
+                if (read == 0) continue
 
                 // VAD 检测
                 val samples = FloatArray(read) { buffer[it] / 32768.0f }
@@ -285,7 +310,7 @@ class SpeechRecognizerManager @Inject constructor(
 
     // ========== 离线模式（SenseVoice）==========
 
-    private fun startOfflineRecognition() {
+    private fun startOfflineRecognition(silenceTimeoutSec: Float) {
         val bufferSize = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
@@ -308,14 +333,15 @@ class SpeechRecognizerManager @Inject constructor(
             val allSamples = mutableListOf<Float>()
             var speechDetected = false
             var silenceFrames = 0
-            val maxSilenceFrames = (SAMPLE_RATE * 5) / (bufferSize / 2)
+            val maxSilenceFrames = (SAMPLE_RATE * silenceTimeoutSec).toInt() / (bufferSize / 2)
 
             val preBufferFrames = (SAMPLE_RATE * 1.0f).toInt() / (bufferSize / 2) + 1
             val preBuffer = ArrayDeque<FloatArray>(preBufferFrames + 1)
 
             while (isActive) {
-                val read = audioRecord?.read(buffer, 0, buffer.size) ?: break
-                if (read <= 0) continue
+                val read = readAudio(buffer, buffer.size)
+                if (read < 0) break
+                if (read == 0) continue
 
                 val samples = FloatArray(read) { buffer[it] / 32768.0f }
                 vad?.acceptWaveform(samples)
@@ -380,6 +406,18 @@ class SpeechRecognizerManager @Inject constructor(
         return result.text.trim()
     }
 
+    private fun readAudio(buffer: ShortArray, size: Int): Int {
+        return synchronized(audioLock) {
+            val record = audioRecord ?: return@synchronized -1
+            try {
+                record.read(buffer, 0, size)
+            } catch (e: Exception) {
+                Log.w(TAG, "AudioRecord read failed", e)
+                -1
+            }
+        }
+    }
+
     fun stopListening() {
         recordingJob?.cancel()
         recordingJob = null
@@ -387,13 +425,22 @@ class SpeechRecognizerManager @Inject constructor(
     }
 
     private fun stopRecording() {
-        try {
-            audioRecord?.stop()
-            audioRecord?.release()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error stopping recording", e)
+        synchronized(audioLock) {
+            val record = audioRecord ?: return
+            try {
+                if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    record.stop()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error stopping AudioRecord", e)
+            }
+            try {
+                record.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error releasing AudioRecord", e)
+            }
+            audioRecord = null
         }
-        audioRecord = null
     }
 
     fun destroy() {

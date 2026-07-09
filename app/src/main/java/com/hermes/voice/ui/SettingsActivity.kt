@@ -5,6 +5,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.hermes.voice.databinding.ActivitySettingsBinding
 import com.hermes.voice.network.ApiConfig
+import com.hermes.voice.network.ConnectionManager
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -14,6 +15,9 @@ class SettingsActivity : AppCompatActivity() {
     @Inject
     lateinit var apiConfig: ApiConfig
 
+    @Inject
+    lateinit var connectionManager: ConnectionManager
+
     private lateinit var binding: ActivitySettingsBinding
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -21,10 +25,7 @@ class SettingsActivity : AppCompatActivity() {
         binding = ActivitySettingsBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        supportActionBar?.apply {
-            title = "设置"
-            setDisplayHomeAsUpEnabled(true)
-        }
+        binding.btnBack.setOnClickListener { finish() }
 
         loadCurrentConfig()
         setupSave()
@@ -54,12 +55,22 @@ class SettingsActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
+            val connectionChanged = url != apiConfig.wsUrl ||
+                token != apiConfig.voiceToken ||
+                deviceId != apiConfig.deviceId
+
             apiConfig.wsUrl = url
             apiConfig.voiceToken = token
             apiConfig.deviceId = deviceId
             apiConfig.wakeWordEnabled = binding.switchWakeWord.isChecked
             apiConfig.autoContinueEnabled = binding.switchAutoContinue.isChecked
-            Toast.makeText(this, "配置已保存", Toast.LENGTH_SHORT).show()
+
+            if (connectionChanged) {
+                connectionManager.restart()
+                Toast.makeText(this, "配置已保存，正在重新连接", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "设置已保存", Toast.LENGTH_SHORT).show()
+            }
             finish()
         }
     }

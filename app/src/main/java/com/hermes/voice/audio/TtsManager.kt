@@ -36,7 +36,9 @@ class TtsManager @Inject constructor(
     private var audioTrack: AudioTrack? = null
     private var isReady = false
     private var speakJob: Job? = null
+    private var speakGeneration = 0L
     private val scope = CoroutineScope(Dispatchers.IO + Job())
+    private val audioLock = Any()
 
     private val _events = MutableSharedFlow<TtsEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<TtsEvent> = _events
@@ -126,6 +128,7 @@ class TtsManager @Inject constructor(
     private fun ensureSpeaking() {
         if (speakJob?.isActive == true) return
         interrupted = false
+        val generation = speakGeneration
         speakJob = scope.launch {
             _events.tryEmit(TtsEvent.SpeakStart)
             dacWarmedUp = false
@@ -145,7 +148,9 @@ class TtsManager @Inject constructor(
             }
 
             streamFinished = false
-            _events.tryEmit(TtsEvent.AllDone)
+            if (generation == speakGeneration) {
+                _events.tryEmit(TtsEvent.AllDone)
+            }
         }
     }
 
@@ -164,38 +169,46 @@ class TtsManager @Inject constructor(
         // 生成完后检查是否被打断
         if (interrupted) return
 
-        ensureAudioTrack(audio.sampleRate)
-
-        // 首句前插入 DAC 预热信号，防止硬件 gate 导致淡入
-        if (!dacWarmedUp) {
-            val warmupSamples = audio.sampleRate * DAC_WARMUP_MS / 1000
-            val warmup = ShortArray(warmupSamples) { 1 }
-            audioTrack?.write(warmup, 0, warmup.size)
-            dacWarmedUp = true
-        }
-
         // 转 PCM 16-bit
         val pcm = ShortArray(audio.samples.size) {
             (audio.samples[it] * 32767).toInt().coerceIn(-32768, 32767).toShort()
         }
 
-        audioTrack?.write(pcm, 0, pcm.size)
+        synchronized(audioLock) {
+            if (interrupted) return
+            ensureAudioTrack(audio.sampleRate)
+
+            // 首句前插入 DAC 预热信号，防止硬件 gate 导致淡入
+            if (!dacWarmedUp) {
+                val warmupSamples = audio.sampleRate * DAC_WARMUP_MS / 1000
+                val warmup = ShortArray(warmupSamples) { 1 }
+                writePcmLocked(warmup)
+                dacWarmedUp = true
+            }
+
+            writePcmLocked(pcm)
+        }
     }
 
     fun stop() {
-        // 标记打断，当前句生成完后不写入 AudioTrack
+        // 标记打断，当前句生成完后不写入 AudioTrack；同时废弃旧 job 的 AllDone 事件
+        speakGeneration++
         interrupted = true
+        speakJob?.cancel()
+        speakJob = null
         synchronized(sentenceQueue) { sentenceQueue.clear() }
         sentenceBuffer.clear()
         streamFinished = true
         dacWarmedUp = false
-        // 立刻静音：flush AudioTrack 缓冲区
-        try {
-            audioTrack?.pause()
-            audioTrack?.flush()
-            audioTrack?.play()
-        } catch (e: Exception) {
-            Log.w(TAG, "AudioTrack flush error: ${e.message}")
+        // 立刻静音：flush AudioTrack 缓冲区。AudioTrack 不是线程安全的，必须避免和播放线程 write 并发。
+        synchronized(audioLock) {
+            try {
+                audioTrack?.pause()
+                audioTrack?.flush()
+                audioTrack?.play()
+            } catch (e: Exception) {
+                Log.w(TAG, "AudioTrack flush error: ${e.message}")
+            }
         }
     }
 
@@ -210,11 +223,12 @@ class TtsManager @Inject constructor(
     private fun ensureAudioTrack(sampleRate: Int) {
         if (audioTrack != null) return
 
-        val bufferSize = AudioTrack.getMinBufferSize(
+        val minBufferSize = AudioTrack.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT
         )
+        val bufferSize = maxOf(minBufferSize, sampleRate * 2)
 
         audioTrack = AudioTrack.Builder()
             .setAudioAttributes(
@@ -237,18 +251,35 @@ class TtsManager @Inject constructor(
         audioTrack?.play()
     }
 
+    private fun writePcmLocked(pcm: ShortArray) {
+        val track = audioTrack ?: return
+        var offset = 0
+        val chunkSize = SAMPLE_RATE / 4
+        while (offset < pcm.size && !interrupted) {
+            val count = minOf(chunkSize, pcm.size - offset)
+            val written = track.write(pcm, offset, count)
+            if (written <= 0) {
+                Log.w(TAG, "AudioTrack write returned $written")
+                break
+            }
+            offset += written
+        }
+    }
+
     private fun releaseAudioTrack() {
-        try {
-            audioTrack?.stop()
-        } catch (e: Exception) {
-            Log.w(TAG, "AudioTrack stop error: ${e.message}")
+        synchronized(audioLock) {
+            try {
+                audioTrack?.stop()
+            } catch (e: Exception) {
+                Log.w(TAG, "AudioTrack stop error: ${e.message}")
+            }
+            try {
+                audioTrack?.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "AudioTrack release error: ${e.message}")
+            }
+            audioTrack = null
         }
-        try {
-            audioTrack?.release()
-        } catch (e: Exception) {
-            Log.w(TAG, "AudioTrack release error: ${e.message}")
-        }
-        audioTrack = null
     }
 
     fun destroy() {

@@ -19,6 +19,7 @@ class ConnectionManager @Inject constructor(
     private var reconnectJob: Job? = null
     private var observeJob: Job? = null
     private var retryCount = 0
+    private var ignoreDisconnectUntilMs = 0L
 
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState
@@ -45,8 +46,16 @@ class ConnectionManager @Inject constructor(
 
     fun stop() {
         reconnectJob?.cancel()
+        ignoreDisconnectUntilMs = System.currentTimeMillis() + 2000L
         wsClient.disconnect()
         _connectionState.value = ConnectionState.DISCONNECTED
+    }
+
+    fun restart() {
+        Log.d("VoiceWS", "restart() with latest config")
+        stop()
+        retryCount = 0
+        start()
     }
 
     private fun observeEvents() {
@@ -59,8 +68,12 @@ class ConnectionManager @Inject constructor(
                         _connectionState.value = ConnectionState.CONNECTED
                     }
                     is WsEvent.Disconnected -> {
-                        _connectionState.value = ConnectionState.DISCONNECTED
-                        scheduleReconnect()
+                        if (System.currentTimeMillis() < ignoreDisconnectUntilMs) {
+                            Log.d("VoiceWS", "Disconnected ignored after manual stop/restart")
+                        } else {
+                            _connectionState.value = ConnectionState.DISCONNECTED
+                            scheduleReconnect()
+                        }
                     }
                     is WsEvent.AuthFailed -> {
                         _connectionState.value = ConnectionState.AUTH_FAILED

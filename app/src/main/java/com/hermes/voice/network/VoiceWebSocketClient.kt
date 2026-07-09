@@ -102,6 +102,12 @@ class VoiceWebSocketClient @Inject constructor(
         webSocket?.send(gson.toJson(msg))
     }
 
+    fun sendApprovalReply(approvalId: String, text: String) {
+        if (!authenticated) return
+        val msg = ApprovalReplyMessage(approvalId = approvalId, text = text)
+        webSocket?.send(gson.toJson(msg))
+    }
+
     fun sendCommand(cmd: String) {
         if (!authenticated) return
         val msg = CommandMessage(cmd = cmd)
@@ -111,6 +117,12 @@ class VoiceWebSocketClient @Inject constructor(
     fun requestSttToken() {
         if (!authenticated) return
         val msg = RequestSttTokenMessage()
+        webSocket?.send(gson.toJson(msg))
+    }
+
+    fun sendPairingStatus() {
+        if (!authenticated) return
+        val msg = PairingStatusMessage()
         webSocket?.send(gson.toJson(msg))
     }
 
@@ -158,6 +170,27 @@ class VoiceWebSocketClient @Inject constructor(
             "system" -> {
                 msg.content?.let { _events.tryEmit(WsEvent.System(it)) }
             }
+            "display" -> {
+                msg.content?.let { _events.tryEmit(WsEvent.Display(it)) }
+            }
+            "approval_clarify" -> {
+                _events.tryEmit(WsEvent.ApprovalClarify(
+                    approvalId = msg.approvalId ?: "",
+                    message = msg.message ?: "这个命令需要审批。如果允许请说允许，否则请说拒绝。"
+                ))
+            }
+            "pairing_required" -> {
+                _events.tryEmit(WsEvent.PairingRequired(
+                    code = msg.code ?: "",
+                    message = msg.message ?: "设备未授权，请批准配对"
+                ))
+            }
+            "pairing_pending" -> {
+                _events.tryEmit(WsEvent.PairingPending)
+            }
+            "pairing_approved" -> {
+                _events.tryEmit(WsEvent.PairingApproved)
+            }
             "stt_token" -> {
                 if (!msg.url.isNullOrBlank()) {
                     _events.tryEmit(WsEvent.SttToken(
@@ -189,9 +222,14 @@ sealed class WsEvent {
     data class ToolStart(val name: String, val description: String) : WsEvent()
     data class ToolEnd(val name: String, val duration: Double) : WsEvent()
     data class ApprovalRequest(val approvalId: String, val command: String, val description: String) : WsEvent()
+    data class ApprovalClarify(val approvalId: String, val message: String) : WsEvent()
     data class TaskComplete(val task: String, val success: Boolean) : WsEvent()
     data class Busy(val message: String) : WsEvent()
     data class System(val content: String) : WsEvent()
+    data class Display(val content: String) : WsEvent()
+    data class PairingRequired(val code: String, val message: String) : WsEvent()
+    data object PairingPending : WsEvent()
+    data object PairingApproved : WsEvent()
     data class SttToken(val provider: String, val url: String, val expiresIn: Int, val appId: String) : WsEvent()
     data class Error(val message: String) : WsEvent()
 }

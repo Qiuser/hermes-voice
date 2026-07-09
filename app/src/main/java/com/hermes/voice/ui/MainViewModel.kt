@@ -183,8 +183,28 @@ class MainViewModel @Inject constructor(
                         appendWithTime("", event.content)
                         _chatLog.postValue(chatLogBuilder.toString())
                     }
+                    is WsEvent.Display -> {
+                        // 只展示不播报
+                        appendWithTime("", event.content)
+                        _chatLog.postValue(chatLogBuilder.toString())
+                    }
                     is WsEvent.ToolStart -> {
                         _chatLog.postValue("${chatLogBuilder}[工具] ${event.description}...")
+                    }
+                    is WsEvent.ApprovalRequest -> {
+                        // 详情已通过 display 消息展示，这里不重复
+                    }
+                    is WsEvent.ApprovalClarify -> {
+                        appendWithTime("审批说明: ", event.message)
+                        _chatLog.postValue(chatLogBuilder.toString())
+                    }
+                    is WsEvent.PairingRequired -> {
+                        appendWithTime("配对: ", "设备未授权，配对码 ${event.code}\n服务端执行：hermes pairing approve voice ${event.code}")
+                        _chatLog.postValue(chatLogBuilder.toString())
+                    }
+                    is WsEvent.PairingApproved -> {
+                        appendWithTime("配对: ", "授权成功，正在继续处理上一条消息")
+                        _chatLog.postValue(chatLogBuilder.toString())
                     }
                     is WsEvent.Error -> {
                         if (waitingForTextResponse || inVoiceSession) {
@@ -257,6 +277,8 @@ class MainViewModel @Inject constructor(
             "Skill library updated",
             "File-mutation verifier",
             "No home channel",
+            "命令已批准",
+            "代理正在恢复",
         )
 
         fun shouldTts(content: String): Boolean {

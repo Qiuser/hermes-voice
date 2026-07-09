@@ -1,6 +1,9 @@
 package com.hermes.voice
 
 import android.Manifest
+import android.animation.AnimatorSet
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -10,6 +13,7 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.view.inputmethod.EditorInfo
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -28,6 +32,8 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var viewModel: MainViewModel
+    private var micPulseAnimator: AnimatorSet? = null
+    private var micAnimatedState: SessionState? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -128,13 +134,92 @@ class MainActivity : AppCompatActivity() {
         viewModel.sendMessage(text)
     }
 
+    private fun updateMicVisual(state: SessionState) {
+        binding.btnStartSession.setImageResource(R.drawable.ic_mic_terminal)
+        when (state) {
+            SessionState.IDLE -> {
+                stopMicPulse()
+            }
+            SessionState.APPROVAL_WAITING, SessionState.PAIRING_WAITING -> {
+                startMicPulse(state, ringBackground = R.drawable.bg_mic_ring_amber, durationMs = 1800L)
+            }
+            SessionState.LISTENING -> {
+                startMicPulse(state, ringBackground = R.drawable.bg_mic_ring_blue, durationMs = 1450L)
+            }
+            SessionState.THINKING -> {
+                startMicPulse(state, ringBackground = R.drawable.bg_mic_ring_blue, durationMs = 2200L)
+            }
+            SessionState.SPEAKING -> {
+                startMicPulse(state, ringBackground = R.drawable.bg_mic_ring_blue, durationMs = 1700L)
+            }
+        }
+    }
+
+    private fun startMicPulse(state: SessionState, ringBackground: Int, durationMs: Long) {
+        if (micPulseAnimator?.isStarted == true && micAnimatedState == state) return
+        stopMicPulse()
+        micAnimatedState = state
+
+        val rings = listOf(binding.pulseRing1, binding.pulseRing2, binding.pulseRing3)
+        val animators = mutableListOf<android.animation.Animator>()
+        rings.forEachIndexed { index, ring ->
+            ring.setBackgroundResource(ringBackground)
+            ring.scaleX = 1f
+            ring.scaleY = 1f
+            ring.alpha = 0f
+
+            val delay = index * (durationMs / 3)
+            animators += ObjectAnimator.ofFloat(ring, "scaleX", 1f, 1.85f).apply {
+                repeatCount = ValueAnimator.INFINITE
+                duration = durationMs
+                startDelay = delay
+                interpolator = AccelerateDecelerateInterpolator()
+            }
+            animators += ObjectAnimator.ofFloat(ring, "scaleY", 1f, 1.85f).apply {
+                repeatCount = ValueAnimator.INFINITE
+                duration = durationMs
+                startDelay = delay
+                interpolator = AccelerateDecelerateInterpolator()
+            }
+            animators += ObjectAnimator.ofFloat(ring, "alpha", 0.34f, 0f).apply {
+                repeatCount = ValueAnimator.INFINITE
+                duration = durationMs
+                startDelay = delay
+                interpolator = AccelerateDecelerateInterpolator()
+            }
+        }
+
+        micPulseAnimator = AnimatorSet().apply {
+            playTogether(animators)
+            start()
+        }
+    }
+
+    private fun stopMicPulse() {
+        micPulseAnimator?.cancel()
+        micPulseAnimator = null
+        micAnimatedState = null
+        binding.btnStartSession.scaleX = 1f
+        binding.btnStartSession.scaleY = 1f
+        binding.btnStartSession.alpha = 1f
+        listOf(binding.pulseRing1, binding.pulseRing2, binding.pulseRing3).forEach { ring ->
+            ring.alpha = 0f
+            ring.scaleX = 1f
+            ring.scaleY = 1f
+        }
+    }
+
+    override fun onDestroy() {
+        stopMicPulse()
+        super.onDestroy()
+    }
+
     private fun observeState() {
         viewModel.sessionState.observe(this) { state ->
             when (state) {
                 SessionState.IDLE -> {
                     binding.tvStatus.text = "点击或说「你好小马」开始对话"
                     binding.tvStatus.setTextColor(getColor(R.color.text_secondary))
-                    binding.btnStartSession.setImageResource(R.drawable.ic_mic_button)
                 }
                 SessionState.LISTENING -> {
                     binding.tvStatus.text = "听取中..."
@@ -148,7 +233,16 @@ class MainActivity : AppCompatActivity() {
                     binding.tvStatus.text = "播报中..."
                     binding.tvStatus.setTextColor(getColor(R.color.accent))
                 }
+                SessionState.APPROVAL_WAITING -> {
+                    binding.tvStatus.text = "审批中... 请说允许或拒绝"
+                    binding.tvStatus.setTextColor(getColor(R.color.warning))
+                }
+                SessionState.PAIRING_WAITING -> {
+                    binding.tvStatus.text = "等待设备授权..."
+                    binding.tvStatus.setTextColor(getColor(R.color.warning))
+                }
             }
+            updateMicVisual(state)
             binding.btnSend.isEnabled = state == SessionState.IDLE
         }
 
