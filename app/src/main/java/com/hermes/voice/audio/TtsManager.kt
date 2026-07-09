@@ -36,6 +36,7 @@ class TtsManager @Inject constructor(
     private var audioTrack: AudioTrack? = null
     private var isReady = false
     private var speakJob: Job? = null
+    private var speakGeneration = 0L
     private val scope = CoroutineScope(Dispatchers.IO + Job())
 
     private val _events = MutableSharedFlow<TtsEvent>(extraBufferCapacity = 16)
@@ -126,6 +127,7 @@ class TtsManager @Inject constructor(
     private fun ensureSpeaking() {
         if (speakJob?.isActive == true) return
         interrupted = false
+        val generation = speakGeneration
         speakJob = scope.launch {
             _events.tryEmit(TtsEvent.SpeakStart)
             dacWarmedUp = false
@@ -145,7 +147,9 @@ class TtsManager @Inject constructor(
             }
 
             streamFinished = false
-            _events.tryEmit(TtsEvent.AllDone)
+            if (generation == speakGeneration) {
+                _events.tryEmit(TtsEvent.AllDone)
+            }
         }
     }
 
@@ -183,8 +187,11 @@ class TtsManager @Inject constructor(
     }
 
     fun stop() {
-        // 标记打断，当前句生成完后不写入 AudioTrack
+        // 标记打断，当前句生成完后不写入 AudioTrack；同时废弃旧 job 的 AllDone 事件
+        speakGeneration++
         interrupted = true
+        speakJob?.cancel()
+        speakJob = null
         synchronized(sentenceQueue) { sentenceQueue.clear() }
         sentenceBuffer.clear()
         streamFinished = true
