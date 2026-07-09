@@ -751,7 +751,9 @@ class VoiceAdapter(BasePlatformAdapter):
                         },
                         {"role": "user", "content": f"用户原话：{user_text}\n输出："},
                     ],
-                    max_tokens=5,
+                    # DeepSeek reasoner spends part of max_tokens on reasoning_content;
+                    # keep enough room for the final one-word answer.
+                    max_tokens=64,
                     temperature=0,
                 ),
                 timeout=8.0,
