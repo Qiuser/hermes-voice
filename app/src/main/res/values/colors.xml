@@ -1,28 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="primary">#5B8CFF</color>
-    <color name="primary_dark">#2F5BEA</color>
-    <color name="primary_soft">#335B8CFF</color>
-    <color name="accent">#9B7CFF</color>
-    <color name="accent_soft">#309B7CFF</color>
-    <color name="warning">#FFB74D</color>
-    <color name="warning_soft">#26FFB74D</color>
+    <!-- Hermes Agent dashboard-inspired palette -->
+    <color name="primary">#35F28A</color>
+    <color name="primary_dark">#0B5F3A</color>
+    <color name="primary_soft">#2635F28A</color>
+    <color name="accent">#F4E5C6</color>
+    <color name="accent_soft">#26F4E5C6</color>
+    <color name="warning">#F4C36A</color>
+    <color name="warning_soft">#26F4C36A</color>
 
-    <color name="background">#080B14</color>
-    <color name="background_bottom">#101728</color>
-    <color name="surface">#141B2D</color>
-    <color name="surface_elevated">#1B2438</color>
-    <color name="card">#202A40</color>
-    <color name="card_stroke">#2F3A56</color>
+    <color name="background">#001F1B</color>
+    <color name="background_bottom">#062B25</color>
+    <color name="surface">#062A25</color>
+    <color name="surface_elevated">#0A342D</color>
+    <color name="card">#082720</color>
+    <color name="card_stroke">#2C4D43</color>
 
-    <color name="text_primary">#F4F7FF</color>
-    <color name="text_secondary">#B7C0D8</color>
-    <color name="text_hint">#69738D</color>
-    <color name="text_muted">#7D89A6</color>
+    <color name="text_primary">#F4E5C6</color>
+    <color name="text_secondary">#C8BA9A</color>
+    <color name="text_hint">#6F8378</color>
+    <color name="text_muted">#8FA79B</color>
 
-    <color name="status_connected">#58D68D</color>
+    <color name="status_connected">#35F28A</color>
     <color name="status_disconnected">#FF6B6B</color>
-    <color name="user_message">#5B8CFF</color>
-    <color name="hermes_message">#9B7CFF</color>
-    <color name="divider">#26314A</color>
+    <color name="user_message">#35F28A</color>
+    <color name="hermes_message">#F4E5C6</color>
+    <color name="divider">#1E4038</color>
 </resources>
